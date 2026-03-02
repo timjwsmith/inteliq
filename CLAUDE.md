@@ -115,5 +115,10 @@ ANTHROPIC_API_KEY, COINBASE_API_KEY, COINBASE_API_SECRET, COINSPOT_API_KEY, COIN
 ## Deployment
 docker-compose down && docker-compose up --build --force-recreate
 
+## Git workflow
+- Always work on a feature branch (never commit directly to main)
+- Branch naming: `feature/short-description`
+- Push branch and raise a PR for Tim to review before merging
+
 ## Task Tracking
 When asked, update this section with current progress.
