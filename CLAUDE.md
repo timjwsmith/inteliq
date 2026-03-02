@@ -114,3 +114,6 @@ ANTHROPIC_API_KEY, COINBASE_API_KEY, COINBASE_API_SECRET, COINSPOT_API_KEY, COIN
 
 ## Deployment
 docker-compose down && docker-compose up --build --force-recreate
+
+## Task Tracking
+When asked, update this section with current progress.
