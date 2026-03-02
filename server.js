@@ -499,47 +499,6 @@ Rules: ASX tickers must end in .AX. Use standard crypto symbols (BTC, ETH, SOL e
   }
 });
 
-// ── EPL Predictions (Claude-powered, cached 24h) ───────────────────────────
-let eplCache = { data: null, ts: 0 };
-
-app.get("/api/epl", async (req, res) => {
-  const now = Date.now();
-  if (eplCache.data && now - eplCache.ts < 24 * 3600 * 1000) {
-    return res.json(eplCache.data);
-  }
-  try {
-    const today = new Date().toLocaleDateString("en-AU", {
-      weekday: "long", day: "numeric", month: "long", year: "numeric"
-    });
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 3000,
-        system: `You are a Premier League football analyst and betting value expert. Today is ${today}. Respond ONLY with a valid JSON array, no markdown fences. Generate predictions for the next 6 upcoming Premier League fixtures based on your knowledge of current form, injuries, table positions, and head-to-head records. Each match must use this exact JSON structure:
-{"home":"Team","away":"Team","date":"Sat 1 Mar","venue":"Stadium","prediction":"Home Win","confidence":"HIGH","homeWinProb":50,"drawProb":25,"awayWinProb":25,"valueBet":"home","valueReasoning":"Brief reason","homeForm":"WWDLW","awayForm":"LWWDL","keyFact":"One key tactical insight","reasoning":"2-3 sentence analysis"}`,
-        messages: [{ role: "user", content: "Generate Premier League predictions for the next round of upcoming fixtures." }]
-      })
-    });
-    const d = await response.json();
-    const text = d.content?.find(b => b.type === "text")?.text || "";
-    const start = text.indexOf("["); const end = text.lastIndexOf("]");
-    if (start === -1 || end === -1) throw new Error("No JSON array in EPL response");
-    const parsed = JSON.parse(text.slice(start, end + 1));
-    if (!Array.isArray(parsed) || parsed.length === 0) throw new Error("Invalid EPL response");
-    eplCache = { data: parsed, ts: now };
-    console.log(`EPL: generated ${parsed.length} predictions`);
-    res.json(parsed);
-  } catch (err) {
-    console.error("EPL error:", err.message);
-    res.status(500).json({ error: "EPL predictions failed — " + err.message });
-  }
-});
 
 // ── Health ─────────────────────────────────────────────────────────────────
 app.get("/health", (_, res) => res.json({

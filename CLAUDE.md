@@ -20,7 +20,6 @@ A full-stack React + Express investment dashboard. Live stock/crypto data, AI-po
 - Portfolio (◑) — multi-source holdings with CHART button on every holding
 - News (◉) — live Yahoo Finance RSS, filterable by category
 - Watchlist (◇) — saved stocks with price targets
-- EPL (◆) — AI Premier League match predictions
 
 ## Key features
 
@@ -71,10 +70,6 @@ A full-stack React + Express investment dashboard. Live stock/crypto data, AI-po
 - Shows live price, % to target, today's change
 - CHART button opens detail page
 
-### EPL Predictions
-- Claude Haiku generates 6 Premier League fixture predictions
-- Cached 24 hours; manual refresh available
-
 ## Portfolio / currency logic
 - CMC CSV: avg cost is always AUD, US stock prices come back USD from Yahoo, ASX prices come back AUD
 - All P&L normalises to USD first before comparing, then converts to display currency
@@ -92,7 +87,6 @@ A full-stack React + Express investment dashboard. Live stock/crypto data, AI-po
 - GET  `/api/coinspot/balances` — CoinSpot read-only API (HMAC-SHA512)
 - GET  `/api/news` — Yahoo Finance RSS aggregated + tagged, cached 15 min
 - GET  `/api/dashboard/picks` — AI-generated top 3 picks, cached 4h (`?force=1` to bust)
-- GET  `/api/epl` — AI Premier League predictions, cached 24h
 - GET  `/health` — server health check (no /api prefix)
 
 ## JSON parsing (all Claude endpoints)

@@ -90,7 +90,6 @@ const TABS = [
   { id:"portfolio", label:"Portfolio", icon:"◑" },
   { id:"news",      label:"News",      icon:"◉" },
   { id:"watchlist", label:"Watchlist", icon:"◇" },
-  { id:"epl",       label:"EPL",       icon:"◆" },
 ];
 
 const PORT_TABS = [
@@ -551,89 +550,6 @@ function NewsCard({ item }) {
   );
 }
 
-// ── EPL card ───────────────────────────────────────────────────────────────
-function EPLCard({ match }) {
-  const [open, setOpen] = useState(false);
-  const confColor = { HIGH:"var(--green)", MEDIUM:"var(--amber)", LOW:"var(--muted2)" }[match.confidence] || "var(--muted2)";
-  const predColor = match.prediction === "Home Win" ? "var(--green)" : match.prediction === "Away Win" ? "var(--blue)" : "var(--amber)";
-  const hasValue = match.valueBet && match.valueBet !== "none";
-
-  const FormBar = ({ form }) => (
-    <div style={{display:"flex",gap:3,justifyContent:"center"}}>
-      {(form || "-----").split("").map((l, i) => {
-        const c = { W:"var(--green)", D:"var(--amber)", L:"var(--red)" }[l] || "var(--muted)";
-        return <span key={i} style={{width:18,height:18,borderRadius:4,background:`${c}30`,color:c,display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:10,fontFamily:"var(--ff-mono)",fontWeight:700}}>{l}</span>;
-      })}
-    </div>
-  );
-
-  return (
-    <div className="card" style={{padding:20,marginBottom:10}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:8}}>
-        <div style={{display:"flex",gap:8,alignItems:"center"}}>
-          <span style={{fontSize:10,fontFamily:"var(--ff-mono)",color:"var(--muted)",letterSpacing:"0.08em"}}>{match.date}</span>
-          {match.venue && <span style={{fontSize:10,color:"var(--muted)",fontFamily:"var(--ff-mono)"}}>· {match.venue}</span>}
-        </div>
-        <div style={{display:"flex",gap:6}}>
-          {hasValue && <span className="badge" style={{background:"var(--amber)20",color:"var(--amber)",border:"1px solid var(--amber)40"}}>VALUE BET</span>}
-          <span className="badge" style={{background:`${confColor}15`,color:confColor,border:`1px solid ${confColor}35`}}>{match.confidence}</span>
-        </div>
-      </div>
-
-      {/* Teams + probabilities */}
-      <div style={{display:"grid",gridTemplateColumns:"1fr auto 1fr",gap:12,alignItems:"center",marginBottom:16}}>
-        <div style={{textAlign:"center"}}>
-          <div style={{fontFamily:"var(--ff-head)",fontSize:16,fontWeight:800,color:"var(--text2)",marginBottom:8}}>{match.home}</div>
-          <FormBar form={match.homeForm}/>
-        </div>
-        <div style={{textAlign:"center",minWidth:110}}>
-          <div style={{display:"flex",gap:4,justifyContent:"center",marginBottom:6}}>
-            {[
-              {label:"H",prob:match.homeWinProb,active:match.prediction==="Home Win",c:"var(--green)"},
-              {label:"D",prob:match.drawProb,   active:match.prediction==="Draw",    c:"var(--amber)"},
-              {label:"A",prob:match.awayWinProb,active:match.prediction==="Away Win",c:"var(--blue)"},
-            ].map(p => (
-              <div key={p.label} style={{background:p.active?`${p.c}25`:"var(--surface)",border:`1px solid ${p.active?p.c:"var(--border)"}`,borderRadius:6,padding:"5px 8px",textAlign:"center",minWidth:34}}>
-                <div style={{fontSize:9,fontFamily:"var(--ff-mono)",color:p.active?p.c:"var(--muted)",letterSpacing:"0.06em"}}>{p.label}</div>
-                <div style={{fontSize:12,fontFamily:"var(--ff-mono)",fontWeight:700,color:p.active?p.c:"var(--muted2)"}}>{p.prob}%</div>
-              </div>
-            ))}
-          </div>
-          <div style={{fontSize:11,fontFamily:"var(--ff-mono)",color:predColor,fontWeight:600,letterSpacing:"0.06em"}}>{match.prediction?.toUpperCase()}</div>
-        </div>
-        <div style={{textAlign:"center"}}>
-          <div style={{fontFamily:"var(--ff-head)",fontSize:16,fontWeight:800,color:"var(--text2)",marginBottom:8}}>{match.away}</div>
-          <FormBar form={match.awayForm}/>
-        </div>
-      </div>
-
-      {match.keyFact && (
-        <div style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:8,padding:"10px 14px",marginBottom:10,fontSize:12,color:"var(--muted2)"}}>
-          ◈ {match.keyFact}
-        </div>
-      )}
-
-      {hasValue && (
-        <div style={{background:"var(--amber)10",border:"1px solid var(--amber)30",borderRadius:8,padding:"10px 14px",marginBottom:10}}>
-          <span style={{fontSize:10,fontFamily:"var(--ff-mono)",color:"var(--amber)",letterSpacing:"0.06em",marginRight:6}}>VALUE: {match.valueBet?.toUpperCase()} —</span>
-          <span style={{fontSize:12,color:"var(--muted2)"}}>{match.valueReasoning}</span>
-        </div>
-      )}
-
-      <button onClick={()=>setOpen(!open)} style={{background:"none",border:"none",fontSize:10,color:"var(--green)",fontFamily:"var(--ff-mono)",padding:0,letterSpacing:"0.08em",display:"flex",alignItems:"center",gap:5}}>
-        <span style={{transform:open?"rotate(180deg)":"none",transition:"transform .2s",display:"inline-block"}}>▾</span>
-        {open ? "HIDE ANALYSIS" : "FULL ANALYSIS"}
-      </button>
-
-      {open && (
-        <div style={{marginTop:14,paddingTop:14,borderTop:"1px solid var(--border)"}}>
-          <div className="section-label">ANALYSIS</div>
-          <p style={{fontSize:13,color:"var(--muted2)",lineHeight:1.7}}>{match.reasoning}</p>
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ── Chart canvas ───────────────────────────────────────────────────────────
 function ChartCanvas({ candles, analysis, range, currency }) {
@@ -865,10 +781,6 @@ export default function App() {
   const [newsItems,setNewsItems]   = useState(NEWS_MOCK);
   const [newsLoading,setNewsLoading] = useState(false);
 
-  // EPL
-  const [eplData,setEplData]     = useState(null);
-  const [eplLoading,setEplLoading] = useState(false);
-  const [eplError,setEplError]   = useState(null);
 
   // Chart / Detail
   const [detailSym,setDetailSym]           = useState(null); // {sym,name,priceType,priceCurrency,sector}
@@ -919,10 +831,6 @@ export default function App() {
   // Fetch news on mount
   useEffect(() => { fetchNews(); }, []);
 
-  // Fetch EPL when tab switches
-  useEffect(() => {
-    if (tab === "epl" && !eplData && !eplLoading) fetchEPL();
-  }, [tab]);
 
   // Refetch chart when range or display currency changes
   useEffect(() => {
@@ -971,16 +879,6 @@ export default function App() {
     setNewsLoading(false);
   }
 
-  async function fetchEPL() {
-    setEplLoading(true); setEplError(null);
-    try {
-      const r = await fetch("/api/epl");
-      const d = await r.json();
-      if (Array.isArray(d) && d.length > 0) setEplData(d);
-      else setEplError(d.error || "No predictions returned");
-    } catch { setEplError("Failed to load predictions"); }
-    setEplLoading(false);
-  }
 
   async function openDetail(symInfo, stock = null, preloadedAnalysis = null) {
     setDetailFrom(tab);
@@ -1509,69 +1407,6 @@ export default function App() {
             </div>
           )}
 
-          {/* ══ EPL ══ */}
-          {tab==="epl"&&(
-            <div>
-              <div className="fu" style={{marginBottom:28}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap"}}>
-                  <div>
-                    <h1 style={{fontFamily:"var(--ff-head)",fontSize:26,fontWeight:800,color:"var(--text2)",marginBottom:6}}>EPL Predictions</h1>
-                    <p style={{fontSize:13,color:"var(--muted2)"}}>AI-powered Premier League match predictions with betting value analysis.</p>
-                  </div>
-                  {eplData && (
-                    <button onClick={()=>{setEplData(null);fetchEPL();}} disabled={eplLoading} style={{background:"none",border:"1px solid var(--border)",borderRadius:8,padding:"7px 16px",fontSize:10,color:eplLoading?"var(--muted)":"var(--muted2)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",opacity:eplLoading?.5:1}}>
-                      {eplLoading ? "↻ LOADING…" : "↻ REFRESH"}
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {eplLoading && (
-                <div style={{display:"grid",gap:10}}>
-                  {[1,2,3].map(i=>(
-                    <div key={i} className="card" style={{padding:20}}>
-                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:14}}><div className="shimmer-el" style={{width:80,height:14}}/><div className="shimmer-el" style={{width:60,height:14}}/></div>
-                      <div style={{display:"grid",gridTemplateColumns:"1fr auto 1fr",gap:12,alignItems:"center",marginBottom:14}}>
-                        <div style={{textAlign:"center"}}><div className="shimmer-el" style={{width:100,height:18,margin:"0 auto 8px"}}/><div className="shimmer-el" style={{width:90,height:18,margin:"0 auto"}}/></div>
-                        <div><div className="shimmer-el" style={{width:110,height:36}}/></div>
-                        <div style={{textAlign:"center"}}><div className="shimmer-el" style={{width:100,height:18,margin:"0 auto 8px"}}/><div className="shimmer-el" style={{width:90,height:18,margin:"0 auto"}}/></div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {eplError && (
-                <div style={{background:"#ff525212",border:"1px solid #ff525230",borderRadius:10,padding:20,color:"var(--red)",fontSize:13,marginBottom:20}}>
-                  {eplError}
-                  <button onClick={fetchEPL} style={{display:"block",marginTop:10,background:"none",border:"1px solid #ff525240",borderRadius:7,padding:"6px 14px",fontSize:11,color:"var(--red)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",cursor:"pointer"}}>TRY AGAIN</button>
-                </div>
-              )}
-
-              {!eplData && !eplLoading && !eplError && (
-                <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:14,padding:"56px 32px",textAlign:"center"}}>
-                  <div style={{fontSize:32,marginBottom:16,opacity:.3}}>◆</div>
-                  <p style={{color:"var(--muted2)",fontSize:15,fontFamily:"var(--ff-head)",fontWeight:600,marginBottom:10}}>No predictions loaded</p>
-                  <button onClick={fetchEPL} style={{background:"var(--green)",color:"#0a0a14",border:"none",borderRadius:10,padding:"12px 28px",fontSize:13,fontFamily:"var(--ff-head)",fontWeight:700}}>Generate Predictions →</button>
-                </div>
-              )}
-
-              {eplData && !eplLoading && (
-                <div className="fu2">
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-                    <div className="section-label" style={{marginBottom:0}}>UPCOMING FIXTURES — {eplData.length} MATCHES</div>
-                    <span className="badge" style={{background:"var(--purple)15",color:"var(--purple)",border:"1px solid var(--purple)35"}}>AI GENERATED</span>
-                  </div>
-                  {eplData.map((m,i)=><EPLCard key={i} match={m}/>)}
-                  <div style={{marginTop:16,padding:"12px 16px",background:"var(--surface)",border:"1px solid var(--border)",borderRadius:10}}>
-                    <p style={{fontSize:11,color:"var(--muted)",lineHeight:1.6}}>
-                      ⚠ Predictions are AI-generated for entertainment purposes only. Not financial or betting advice. Always gamble responsibly.
-                    </p>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
 
           {/* ══ DETAIL / CHART ══ */}
           {tab==="detail"&&(
