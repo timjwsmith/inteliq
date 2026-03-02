@@ -9,7 +9,7 @@ services:
     container_name: inteliq-server
     env_file: .env
     ports:
-      - "3001:3001"
+      - "4001:3001"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3001/health"]
@@ -24,7 +24,7 @@ services:
       dockerfile: Dockerfile
     container_name: inteliq-app
     ports:
-      - "3000:80"
+      - "4000:80"
     depends_on:
       server:
         condition: service_healthy

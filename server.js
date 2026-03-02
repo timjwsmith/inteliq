@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const fetch = require("node-fetch");
+const crypto = require("crypto");
 require("dotenv").config();
 
 const app = express();
@@ -8,14 +9,19 @@ app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 3001;
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const ANTHROPIC_API_KEY   = process.env.ANTHROPIC_API_KEY;
+const COINBASE_API_KEY    = process.env.COINBASE_API_KEY    || "";
+const COINBASE_API_SECRET = process.env.COINBASE_API_SECRET || "";
+const COINSPOT_API_KEY    = process.env.COINSPOT_API_KEY    || "";
+const COINSPOT_API_SECRET = process.env.COINSPOT_API_SECRET || "";
+const FINNHUB_API_KEY     = process.env.FINNHUB_API_KEY     || "";
 
 if (!ANTHROPIC_API_KEY) {
   console.error("❌ ANTHROPIC_API_KEY is not set in .env");
   process.exit(1);
 }
 
-// Proxy route — keeps API key server-side only
+// ── Anthropic proxy ────────────────────────────────────────────────────────
 app.post("/api/analyse", async (req, res) => {
   try {
     const response = await fetch("https://api.anthropic.com/v1/messages", {
@@ -27,7 +33,6 @@ app.post("/api/analyse", async (req, res) => {
       },
       body: JSON.stringify(req.body),
     });
-
     const data = await response.json();
     res.json(data);
   } catch (err) {
@@ -36,8 +41,519 @@ app.post("/api/analyse", async (req, res) => {
   }
 });
 
-app.get("/health", (_, res) => res.json({ status: "ok" }));
+// ── Live AUD/USD FX rate ───────────────────────────────────────────────────
+let fxCache = { rate: 0.635, ts: 0 };
+
+async function getLiveAUDUSD() {
+  const now = Date.now();
+  if (fxCache.rate && now - fxCache.ts < 15 * 60 * 1000) return fxCache.rate;
+  try {
+    const r = await fetch("https://query1.finance.yahoo.com/v8/finance/chart/AUDUSD=X?interval=1d&range=1d", {
+      headers: { "User-Agent": "Mozilla/5.0" },
+    });
+    const d = await r.json();
+    const price = d?.chart?.result?.[0]?.meta?.regularMarketPrice;
+    if (price && price > 0) {
+      fxCache = { rate: price, ts: now };
+      console.log(`FX: AUD/USD = ${price}`);
+      return price;
+    }
+  } catch (e) {
+    console.error("FX fetch error:", e.message);
+  }
+  return fxCache.rate;
+}
+
+app.get("/api/fx/audusd", async (req, res) => {
+  const rate = await getLiveAUDUSD();
+  res.json({ rate, pair: "AUDUSD", ts: fxCache.ts });
+});
+
+// ── Coinbase Advanced Trade API ────────────────────────────────────────────
+function coinbaseJWT(method, path) {
+  const keySecret = COINBASE_API_SECRET.replace(/\\n/g, "\n");
+  const host = "api.coinbase.com";
+  const uri = `${method} ${host}${path}`;
+  const nonce = crypto.randomBytes(16).toString("hex");
+  const timestamp = Math.floor(Date.now() / 1000);
+  const header  = Buffer.from(JSON.stringify({ alg:"ES256", kid:COINBASE_API_KEY, nonce })).toString("base64url");
+  const payload = Buffer.from(JSON.stringify({ sub:COINBASE_API_KEY, iss:"cdp", nbf:timestamp, exp:timestamp+120, uri })).toString("base64url");
+  const signingInput = `${header}.${payload}`;
+  try {
+    const sign = crypto.createSign("SHA256");
+    sign.update(signingInput);
+    return `${signingInput}.${sign.sign({ key: keySecret, dsaEncoding: "ieee-p1363" }, "base64url")}`;
+  } catch (e) {
+    console.error("Coinbase JWT sign error:", e.message);
+    return null;
+  }
+}
+
+app.get("/api/coinbase/balances", async (req, res) => {
+  if (!COINBASE_API_KEY || !COINBASE_API_SECRET) {
+    return res.status(503).json({ error: "Coinbase API keys not configured — add COINBASE_API_KEY and COINBASE_API_SECRET to .env" });
+  }
+  try {
+    const portfoliosPath = "/api/v3/brokerage/portfolios";
+    const jwt1 = coinbaseJWT("GET", portfoliosPath);
+    if (!jwt1) return res.status(500).json({ error: "Failed to sign Coinbase request — check API key/secret format" });
+
+    const pr = await fetch(`https://api.coinbase.com${portfoliosPath}`, {
+      headers: { "Authorization": `Bearer ${jwt1}`, "Content-Type": "application/json" },
+    });
+    const portfoliosData = await pr.json();
+    const portfolios = portfoliosData.portfolios || [];
+    const defaultPortfolio = portfolios.find(p => p.type === "DEFAULT") || portfolios[0];
+    if (!defaultPortfolio) return res.status(404).json({ error: "No Coinbase portfolio found" });
+
+    const breakdownPath = `/api/v3/brokerage/portfolios/${defaultPortfolio.uuid}`;
+    const jwt2 = coinbaseJWT("GET", breakdownPath);
+    const br = await fetch(`https://api.coinbase.com${breakdownPath}`, {
+      headers: { "Authorization": `Bearer ${jwt2}`, "Content-Type": "application/json" },
+    });
+    const breakdown = await br.json();
+    const spotPositions = breakdown?.breakdown?.spot_positions || [];
+
+    const stablecoins = ["USD", "USDC", "USDT", "DAI", "BUSD"];
+    const holdings = spotPositions
+      .filter(p => parseFloat(p.total_balance_crypto) > 0 && !stablecoins.includes(p.asset))
+      .map(p => {
+        const qty = parseFloat(p.total_balance_crypto);
+        const costBasis = parseFloat(p.cost_basis?.value || 0);
+        return {
+          sym: p.asset, name: p.asset, qty,
+          avg: qty > 0 ? costBasis / qty : 0,
+          avgCurrency: "USD",
+          sector: "Crypto", horizon: "Medium", priceType: "crypto", source: "coinbase",
+        };
+      });
+
+    res.json({ holdings, lastSync: new Date().toISOString() });
+  } catch (err) {
+    console.error("Coinbase error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── CoinSpot Read-Only API ─────────────────────────────────────────────────
+app.get("/api/coinspot/balances", async (req, res) => {
+  if (!COINSPOT_API_KEY || !COINSPOT_API_SECRET) {
+    return res.status(503).json({ error: "CoinSpot API keys not configured — add COINSPOT_API_KEY and COINSPOT_API_SECRET to .env" });
+  }
+  try {
+    const nonce = Date.now();
+    const postData = JSON.stringify({ nonce });
+    const sign = crypto.createHmac("sha512", COINSPOT_API_SECRET).update(postData).digest("hex");
+
+    const r = await fetch("https://www.coinspot.com.au/api/ro/my/balances", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "key": COINSPOT_API_KEY, "sign": sign },
+      body: postData,
+    });
+    const data = await r.json();
+    if (data.status !== "ok") {
+      return res.status(400).json({ error: data.message || "CoinSpot API error" });
+    }
+
+    const holdings = [];
+    for (const entry of (data.balances || [])) {
+      for (const [sym, details] of Object.entries(entry)) {
+        const qty = parseFloat(details.balance);
+        if (qty <= 0) continue;
+        const audRate = parseFloat(details.rate || 0);
+        holdings.push({
+          sym: sym.toUpperCase(), name: sym.toUpperCase(), qty,
+          avg: audRate,
+          avgCurrency: "AUD",
+          sector: "Crypto", horizon: "Medium", priceType: "crypto", source: "coinspot",
+        });
+      }
+    }
+    res.json({ holdings, lastSync: new Date().toISOString() });
+  } catch (err) {
+    console.error("CoinSpot error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Price helpers ──────────────────────────────────────────────────────────
+const COINGECKO_IDS = {
+  BTC:"bitcoin", ETH:"ethereum", SOL:"solana", BNB:"binancecoin",
+  XRP:"ripple", ADA:"cardano", AVAX:"avalanche-2", DOGE:"dogecoin",
+  DOT:"polkadot", MATIC:"matic-network", LINK:"chainlink", UNI:"uniswap",
+  LTC:"litecoin", BCH:"bitcoin-cash", ATOM:"cosmos", SHIB:"shiba-inu",
+  TRX:"tron", TON:"the-open-network", OP:"optimism", ARB:"arbitrum",
+  NEAR:"near", ICP:"internet-computer", FTM:"fantom", INJ:"injective-protocol",
+  HBAR:"hedera-hashgraph", ALGO:"algorand", VET:"vechain",
+};
+
+async function fetchCryptoPrice(sym) {
+  const id = COINGECKO_IDS[sym.toUpperCase()] || sym.toLowerCase();
+  const r = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${id}&vs_currencies=usd&include_24hr_change=true`);
+  const d = await r.json();
+  if (!d[id]) return null;
+  const price = d[id].usd;
+  const change = d[id].usd_24h_change || 0;
+  return {
+    sym: sym.toUpperCase(), price, priceUSD: price,
+    change: parseFloat(change.toFixed(2)),
+    changeStr: (change >= 0 ? "+" : "") + change.toFixed(2) + "%",
+    up: change >= 0, currency: "USD", source: "coingecko",
+  };
+}
+
+async function fetchStockPrice(sym) {
+  const r = await fetch(
+    `https://query1.finance.yahoo.com/v8/finance/chart/${sym.toUpperCase()}?interval=1d&range=1d`,
+    { headers: { "User-Agent": "Mozilla/5.0" } }
+  );
+  const d = await r.json();
+  const quote = d?.chart?.result?.[0];
+  if (!quote) return null;
+  const meta = quote.meta;
+  const price = meta.regularMarketPrice;
+  const prevClose = meta.chartPreviousClose || meta.previousClose;
+  const change = prevClose ? ((price - prevClose) / prevClose) * 100 : 0;
+  return {
+    sym: sym.toUpperCase(), price, priceUSD: null,
+    change: parseFloat(change.toFixed(2)),
+    changeStr: (change >= 0 ? "+" : "") + change.toFixed(2) + "%",
+    up: change >= 0, currency: meta.currency || "USD",
+    source: "yahoo", marketState: meta.marketState,
+  };
+}
+
+// ── Live price — single ────────────────────────────────────────────────────
+app.get("/api/price", async (req, res) => {
+  const { sym, type } = req.query;
+  if (!sym) return res.status(400).json({ error: "sym required" });
+  try {
+    const result = type === "crypto" ? await fetchCryptoPrice(sym) : await fetchStockPrice(sym);
+    if (!result) return res.status(404).json({ error: "Symbol not found" });
+    res.json(result);
+  } catch (err) {
+    console.error("Price fetch error:", err);
+    res.status(500).json({ error: "Price fetch failed" });
+  }
+});
+
+// ── Batch prices ───────────────────────────────────────────────────────────
+app.post("/api/prices", async (req, res) => {
+  const { symbols } = req.body;
+  if (!symbols || !Array.isArray(symbols)) return res.status(400).json({ error: "symbols array required" });
+
+  const prices = {};
+  const cryptoSyms = symbols.filter(s => s.type === "crypto");
+  const stockSyms  = symbols.filter(s => s.type !== "crypto");
+
+  // Batch all cryptos into a single CoinGecko call
+  if (cryptoSyms.length > 0) {
+    try {
+      const idMap = cryptoSyms.map(s => ({
+        sym: s.sym,
+        id: COINGECKO_IDS[s.sym.toUpperCase()] || s.sym.toLowerCase(),
+      }));
+      const ids = idMap.map(x => x.id).join(",");
+      const r = await fetch(
+        `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`,
+        { headers: { "User-Agent": "Mozilla/5.0" } }
+      );
+      const d = await r.json();
+      for (const { sym, id } of idMap) {
+        if (d[id]) {
+          const price  = d[id].usd;
+          const change = d[id].usd_24h_change || 0;
+          prices[sym] = {
+            sym: sym.toUpperCase(), price, priceUSD: price,
+            change: parseFloat(change.toFixed(2)),
+            changeStr: (change >= 0 ? "+" : "") + change.toFixed(2) + "%",
+            up: change >= 0, currency: "USD", source: "coingecko",
+          };
+        }
+      }
+    } catch (e) {
+      console.error("CoinGecko batch error:", e.message);
+    }
+  }
+
+  // Individual Yahoo Finance calls for stocks/ETFs
+  const stockResults = await Promise.allSettled(
+    stockSyms.map(async ({ sym }) => {
+      try { return await fetchStockPrice(sym); } catch { return { sym, error: "fetch failed" }; }
+    })
+  );
+  stockResults.forEach((r, i) => {
+    if (r.status === "fulfilled" && !r.value?.error) prices[stockSyms[i].sym] = r.value;
+  });
+
+  res.json(prices);
+});
+
+// ── Chart OHLCV data ───────────────────────────────────────────────────────
+const RANGE_CFG = {
+  "1d":  { interval:"5m",  range:"1d"  },
+  "7d":  { interval:"1h",  range:"7d"  },
+  "1mo": { interval:"1d",  range:"1mo" },
+  "3mo": { interval:"1d",  range:"3mo" },
+  "1y":  { interval:"1wk", range:"1y"  },
+};
+
+app.get("/api/chart/:sym", async (req, res) => {
+  const { sym } = req.params;
+  const range = req.query.range || "1mo";
+  const cfg = RANGE_CFG[range] || RANGE_CFG["1mo"];
+  // Crypto symbols need currency suffix for Yahoo Finance (e.g. BTC → BTC-USD or BTC-AUD)
+  const ccy = (req.query.currency || "USD").toUpperCase();
+  const yahooSym = COINGECKO_IDS[sym.toUpperCase()] ? `${sym.toUpperCase()}-${ccy}` : sym;
+  try {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSym)}?interval=${cfg.interval}&range=${cfg.range}&includePrePost=false`;
+    const r = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
+    const d = await r.json();
+    const result = d?.chart?.result?.[0];
+    if (!result) return res.status(404).json({ error: "Symbol not found" });
+    const meta = result.meta;
+    const timestamps = result.timestamp || [];
+    const q = result.indicators?.quote?.[0] || {};
+    const candles = timestamps
+      .map((ts, i) => ({ t: ts * 1000, o: q.open?.[i], h: q.high?.[i], l: q.low?.[i], c: q.close?.[i], v: q.volume?.[i] }))
+      .filter(c => c.o != null && c.h != null && c.l != null && c.c != null);
+    res.json({
+      sym: sym.toUpperCase(),
+      name: meta.longName || meta.shortName || sym,
+      currency: meta.currency || "USD",
+      currentPrice: meta.regularMarketPrice,
+      previousClose: meta.chartPreviousClose || meta.previousClose,
+      candles, range,
+    });
+  } catch (err) {
+    console.error("Chart error:", err.message);
+    res.status(500).json({ error: "Chart fetch failed" });
+  }
+});
+
+// ── Detailed technical analysis with chart annotations ─────────────────────
+app.post("/api/analyse/detail", async (req, res) => {
+  const { sym, name, candles, range, currentPrice, currency } = req.body;
+  if (!sym || !candles?.length) return res.status(400).json({ error: "sym and candles required" });
+
+  const recent = candles.slice(-40);
+  const minP = Math.min(...recent.map(c => c.l).filter(Boolean));
+  const maxP = Math.max(...recent.map(c => c.h).filter(Boolean));
+  const firstC = recent[0]?.c, lastC = recent[recent.length - 1]?.c;
+  const chgPct = firstC ? ((lastC - firstC) / firstC * 100).toFixed(1) : 0;
+  const avgVol = recent.reduce((s, c) => s + (c.v || 0), 0) / recent.length;
+
+  const summary = recent.map((c, i) => ({
+    i,
+    o: c.o?.toFixed(2), h: c.h?.toFixed(2), l: c.l?.toFixed(2), c: c.c?.toFixed(2),
+    vR: c.v && avgVol ? (c.v / avgVol).toFixed(1) : "—",
+  }));
+
+  try {
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 1500,
+        system: `You are a senior investment analyst. Today is ${new Date().toLocaleDateString("en-AU",{year:"numeric",month:"long",day:"numeric"})}. You have been given live OHLCV chart data for this asset. Using this chart data AND your knowledge of the asset's fundamentals, sector dynamics, macro environment, and market conditions as of today, produce a single unified investment analysis with ONE verdict. Integrate technical signals from the chart with fundamental and macro factors — do not treat them as separate signals. The current live price is the closing price of the most recent candle. Return ONLY valid JSON (no markdown fences):
+{"verdict":"BUY|WATCH|AVOID|HOLD","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","target":"$X","stopLoss":"$X","summary":"2-3 sentences combining all factors","macro":"2-3 sentences","fundamental":"2-3 sentences","technical":"2-3 sentences based on the chart data","sentiment":"2-3 sentences","portfolio":"2-3 sentences","support":[{"price":0.0,"label":"Label","strength":"STRONG|MEDIUM|WEAK"}],"resistance":[{"price":0.0,"label":"Label","strength":"STRONG|MEDIUM|WEAK"}],"pattern":{"name":"Pattern name or null","bullish":true,"note":"1 sentence"},"momentum":"1-2 sentences","volume":"1 sentence"}
+Provide 1-3 support and 1-3 resistance levels using actual prices from the data.`,
+        messages: [{ role: "user", content: `Symbol: ${sym} (${name})\nCurrent: ${currentPrice} ${currency} | Range: ${range} | Change: ${chgPct}%\nPrice range: ${minP?.toFixed(2)} – ${maxP?.toFixed(2)}\n\nOHLCV (i=candle index, vR=vol vs avg):\n${JSON.stringify(summary)}` }],
+      })
+    });
+    const d = await response.json();
+    const text = d.content?.find(b => b.type === "text")?.text || "";
+    const start = text.indexOf("{"); const end = text.lastIndexOf("}");
+    if (start === -1 || end === -1) throw new Error("No JSON object in response");
+    const parsed = JSON.parse(text.slice(start, end + 1));
+    res.json(parsed);
+  } catch (err) {
+    console.error("Detail analysis error:", err.message);
+    res.status(500).json({ error: "Detail analysis failed" });
+  }
+});
+
+// ── Live News (Yahoo Finance RSS) ──────────────────────────────────────────
+let newsCache = { items: [], ts: 0 };
+
+app.get("/api/news", async (req, res) => {
+  const now = Date.now();
+  if (newsCache.items.length && now - newsCache.ts < 15 * 60 * 1000) {
+    return res.json(newsCache.items);
+  }
+  try {
+    const feeds = [
+      "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EGSPC,NVDA,MSFT,AAPL,AMD&region=US&lang=en-US",
+      "https://feeds.finance.yahoo.com/rss/2.0/headline?s=BTC-USD,ETH-USD,SOL-USD&region=US&lang=en-US",
+      "https://feeds.finance.yahoo.com/rss/2.0/headline?s=BHP.AX,RIO.AX,PLS.AX,FMG.AX&region=AU&lang=en-AU",
+    ];
+
+    const results = await Promise.allSettled(
+      feeds.map(url => fetch(url, { headers: { "User-Agent": "Mozilla/5.0" }, timeout: 8000 }).then(r => r.text()))
+    );
+
+    const allItems = [];
+    for (const r of results) {
+      if (r.status !== "fulfilled") continue;
+      const xml = r.value;
+      const matches = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)];
+      for (const m of matches) {
+        const c = m[1];
+        const title = (c.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/) || c.match(/<title>(.*?)<\/title>/))?.[1]?.trim();
+        const link  = (c.match(/<link>(.*?)<\/link>/))?.[1]?.trim() || "";
+        const pubDate = (c.match(/<pubDate>(.*?)<\/pubDate>/))?.[1]?.trim() || "";
+        if (title && !allItems.find(i => i.title === title)) {
+          allItems.push({ title, link, pubDate });
+        }
+      }
+    }
+
+    allItems.sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
+
+    const mapped = allItems.slice(0, 16).map(item => {
+      const age = item.pubDate ? Math.round((now - new Date(item.pubDate).getTime()) / 3600000) : 0;
+      const ageStr = age < 1 ? "< 1h ago" : age < 24 ? `${age}h ago` : `${Math.round(age / 24)}d ago`;
+
+      const h = item.title.toLowerCase();
+      let tag = "MARKETS";
+      if (/bitcoin|crypto|eth\b|bnb|solana|ripple|xrp|coin|defi|nft/i.test(h)) tag = "CRYPTO";
+      else if (/asx|bhp|rio|fortescue|fmg|lithium|australia|pilbara|mining|ore/i.test(h)) tag = "ASX MINING";
+      else if (/nvidia|apple|microsoft|google|amazon|meta|tesla|tech|ai\b|chip|semiconductor|palantir|amd/i.test(h)) tag = "US TECH";
+
+      let sentiment = "NEUTRAL";
+      if (/surge|rally|soar|jump|gain|beat|boom|bull|rise|climb|record|strong|high/i.test(h)) sentiment = "BULLISH";
+      if (/fall|drop|crash|plunge|miss|bear|decline|weak|concern|fear|tumble|sell.off|warning/i.test(h)) sentiment = "BEARISH";
+
+      let impact = "MEDIUM";
+      if (/fed|rate|inflation|earnings|gdp|historic|record high|crisis|major|crash/i.test(h)) impact = "HIGH";
+      if (/minor|slight|small|brief|marginal/i.test(h)) impact = "LOW";
+
+      // Extract likely affected tickers
+      const affected = [];
+      if (/nvidia|nvda/i.test(h)) affected.push("NVDA");
+      if (/apple|aapl/i.test(h)) affected.push("AAPL");
+      if (/microsoft|msft/i.test(h)) affected.push("MSFT");
+      if (/bitcoin|btc/i.test(h)) affected.push("BTC");
+      if (/ethereum|eth\b/i.test(h)) affected.push("ETH");
+      if (/bhp/i.test(h)) affected.push("BHP.AX");
+      if (/rio tinto|rio\.ax/i.test(h)) affected.push("RIO.AX");
+      if (/pilbara|pls/i.test(h)) affected.push("PLS.AX");
+
+      return { time: ageStr, tag, headline: item.title, sentiment, impact, affected, commentary: "", link: item.link, live: true };
+    });
+
+    if (mapped.length > 0) {
+      newsCache = { items: mapped, ts: now };
+      console.log(`News: fetched ${mapped.length} items`);
+      res.json(mapped);
+    } else {
+      res.status(503).json({ error: "No news items fetched" });
+    }
+  } catch (err) {
+    console.error("News error:", err.message);
+    res.status(500).json({ error: "News fetch failed" });
+  }
+});
+
+// ── Dashboard Picks (Claude-powered, cached 4h) ────────────────────────────
+let dashCache = { picks: null, ts: 0 };
+
+app.get("/api/dashboard/picks", async (req, res) => {
+  const now = Date.now();
+  const force = req.query.force === "1";
+  if (!force && dashCache.picks && now - dashCache.ts < 4 * 60 * 60 * 1000) {
+    return res.json(dashCache.picks);
+  }
+  try {
+    const today = new Date().toLocaleDateString("en-AU", {
+      weekday: "long", day: "numeric", month: "long", year: "numeric"
+    });
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 3000,
+        system: `You are a senior investment analyst generating today's top picks. Today is ${today}.
+Generate 3 high-conviction investment picks — aim for variety across asset classes (e.g. US large-cap stock, ASX stock or ETF, crypto). Pick what is genuinely interesting given current market conditions as of today's date.
+Respond ONLY with a valid JSON array, no markdown fences. Each pick must use this exact structure:
+[{"sym":"TICKER","name":"Full Company Name","sector":"Sector","verdict":"BUY|WATCH|AVOID|HOLD","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","priceStatic":0.00,"target":"$X","upside":"+X%","up":true,"priceType":"stock or crypto","priceCurrency":"USD or AUD","avgCurrency":"USD or AUD","summary":"2-3 sentences on the core thesis.","macro":"2-3 sentences on macro tailwinds or headwinds.","fundamental":"2-3 sentences on key fundamental metrics.","technical":"2-3 sentences on technical setup.","sentiment":"2-3 sentences on analyst and market sentiment.","insider":"2-3 sentences on insider activity or institutional flows.","portfolio":"1-2 sentences on portfolio fit and sizing."}]
+Rules: ASX tickers must end in .AX. Use standard crypto symbols (BTC, ETH, SOL etc). For priceStatic use your best estimate of the current price. Be direct and specific — avoid generic statements.`,
+        messages: [{ role: "user", content: "Generate today's 3 top investment picks with full analysis." }],
+      }),
+    });
+    const d = await response.json();
+    const text = d.content?.find(b => b.type === "text")?.text || "";
+    const start = text.indexOf("[");
+    const end   = text.lastIndexOf("]");
+    if (start === -1 || end === -1) throw new Error("No JSON array found in response");
+    const parsed = JSON.parse(text.slice(start, end + 1));
+    if (!Array.isArray(parsed) || parsed.length === 0) throw new Error("Invalid response format");
+    dashCache = { picks: parsed, ts: now };
+    console.log(`Dashboard: generated ${parsed.length} picks`);
+    res.json(parsed);
+  } catch (err) {
+    console.error("Dashboard picks error:", err.message);
+    res.status(500).json({ error: "Could not generate picks — " + err.message });
+  }
+});
+
+// ── EPL Predictions (Claude-powered, cached 24h) ───────────────────────────
+let eplCache = { data: null, ts: 0 };
+
+app.get("/api/epl", async (req, res) => {
+  const now = Date.now();
+  if (eplCache.data && now - eplCache.ts < 24 * 3600 * 1000) {
+    return res.json(eplCache.data);
+  }
+  try {
+    const today = new Date().toLocaleDateString("en-AU", {
+      weekday: "long", day: "numeric", month: "long", year: "numeric"
+    });
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 3000,
+        system: `You are a Premier League football analyst and betting value expert. Today is ${today}. Respond ONLY with a valid JSON array, no markdown fences. Generate predictions for the next 6 upcoming Premier League fixtures based on your knowledge of current form, injuries, table positions, and head-to-head records. Each match must use this exact JSON structure:
+{"home":"Team","away":"Team","date":"Sat 1 Mar","venue":"Stadium","prediction":"Home Win","confidence":"HIGH","homeWinProb":50,"drawProb":25,"awayWinProb":25,"valueBet":"home","valueReasoning":"Brief reason","homeForm":"WWDLW","awayForm":"LWWDL","keyFact":"One key tactical insight","reasoning":"2-3 sentence analysis"}`,
+        messages: [{ role: "user", content: "Generate Premier League predictions for the next round of upcoming fixtures." }]
+      })
+    });
+    const d = await response.json();
+    const text = d.content?.find(b => b.type === "text")?.text || "";
+    const start = text.indexOf("["); const end = text.lastIndexOf("]");
+    if (start === -1 || end === -1) throw new Error("No JSON array in EPL response");
+    const parsed = JSON.parse(text.slice(start, end + 1));
+    if (!Array.isArray(parsed) || parsed.length === 0) throw new Error("Invalid EPL response");
+    eplCache = { data: parsed, ts: now };
+    console.log(`EPL: generated ${parsed.length} predictions`);
+    res.json(parsed);
+  } catch (err) {
+    console.error("EPL error:", err.message);
+    res.status(500).json({ error: "EPL predictions failed — " + err.message });
+  }
+});
+
+// ── Health ─────────────────────────────────────────────────────────────────
+app.get("/health", (_, res) => res.json({
+  status: "ok",
+  anthropic: !!ANTHROPIC_API_KEY,
+  coinbase:  !!(COINBASE_API_KEY && COINBASE_API_SECRET),
+  coinspot:  !!(COINSPOT_API_KEY && COINSPOT_API_SECRET),
+  finnhub:   !!FINNHUB_API_KEY,
+}));
 
 app.listen(PORT, () => {
-  console.log(`✅ IntelIQ proxy server running on port ${PORT}`);
+  console.log(`✅ IntelIQ server running on port ${PORT}`);
+  console.log(`   Anthropic: ${ANTHROPIC_API_KEY ? "✓" : "✗ missing"}`);
+  console.log(`   Coinbase:  ${COINBASE_API_KEY  ? "✓" : "✗ not configured"}`);
+  console.log(`   CoinSpot:  ${COINSPOT_API_KEY  ? "✓" : "✗ not configured"}`);
+  console.log(`   Finnhub:   ${FINNHUB_API_KEY   ? "✓" : "✗ optional"}`);
 });
