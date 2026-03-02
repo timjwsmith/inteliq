@@ -84,6 +84,50 @@ const NEWS_MOCK = [
   { time:"9h ago",  tag:"ASX MINING", headline:"Lithium spot price stabilises for second consecutive week — floor forming?",         sentiment:"NEUTRAL", impact:"MEDIUM", affected:["PLS.AX","LTR.AX","AKE.AX"],  commentary:"Rate of decline has slowed. Supports WATCH on PLS.AX." },
 ];
 
+// ── Glossary ───────────────────────────────────────────────────────────────
+const GLOSSARY = [
+  { term:"Double Bottom",              def:"A bullish reversal chart pattern forming a 'W' shape, where price hits the same low twice before reversing upward. Signals seller exhaustion and a potential trend change to the upside." },
+  { term:"Double Top",                 def:"A bearish reversal chart pattern forming an 'M' shape, where price hits the same high twice before reversing downward. Signals buyer exhaustion and a potential trend change to the downside." },
+  { term:"Head and Shoulders",         def:"A bearish reversal pattern with three peaks: a higher middle peak (the head) flanked by two lower peaks (the shoulders). A decisive break below the neckline confirms the reversal." },
+  { term:"Inverse Head and Shoulders", def:"The bullish mirror of Head and Shoulders: three troughs with the middle deepest. A break above the neckline signals upward momentum and a potential trend reversal." },
+  { term:"Bull Flag",                  def:"A bullish continuation pattern: a sharp surge (the flagpole) followed by a brief downward consolidation (the flag). A breakout above the flag typically resumes the uptrend." },
+  { term:"Bear Flag",                  def:"A bearish continuation pattern: a sharp decline followed by a brief upward consolidation. A breakdown below the flag typically resumes the downtrend." },
+  { term:"Cup and Handle",             def:"A bullish continuation pattern resembling a teacup: a rounded bottom (cup) followed by a short consolidation (handle). A breakout above the handle is the buy signal." },
+  { term:"Ascending Triangle",         def:"A bullish pattern with a flat resistance line and a rising support trendline. Price coils upward — a breakout above resistance signals continued strength." },
+  { term:"Descending Triangle",        def:"A bearish pattern with a flat support line and a falling resistance trendline. A breakdown below support signals continued weakness." },
+  { term:"Symmetrical Triangle",       def:"A neutral consolidation pattern with converging trendlines, reflecting indecision. The breakout direction determines the next significant move." },
+  { term:"Falling Wedge",              def:"A bullish pattern where price consolidates between two downward-sloping, converging trendlines. A breakout above the upper line signals a reversal or continuation upward." },
+  { term:"Rising Wedge",               def:"A bearish pattern where price consolidates between two upward-sloping, converging trendlines. Despite rising price, weakening momentum often precedes a breakdown." },
+  { term:"Pennant",                    def:"A short-term continuation pattern following a strong move: price consolidates in a small symmetrical triangle before typically continuing in the original direction." },
+  { term:"Hammer",                     def:"A bullish reversal candlestick with a small body and long lower wick. Signals that sellers pushed price down intraday but buyers recovered strongly by the close." },
+  { term:"Shooting Star",              def:"A bearish reversal candlestick with a small body and long upper wick. Signals that buyers pushed price up intraday but sellers overwhelmed them by the close." },
+  { term:"Doji",                       def:"A candlestick where open and close are nearly equal, leaving a very small body. Signals market indecision — a Doji after a strong trend may indicate a reversal is near." },
+  { term:"Engulfing",                  def:"A two-candle reversal pattern. Bullish Engulfing: a large green candle fully covers the prior red candle. Bearish Engulfing: the reverse. Both signal potential trend reversals." },
+  { term:"Support",                    def:"A price level where buying interest has historically been strong enough to halt a decline. Acts as a floor — the more times price bounces off it, the stronger the level." },
+  { term:"Resistance",                 def:"A price level where selling pressure has historically been strong enough to halt an advance. Acts as a ceiling — once broken, resistance often flips to become support." },
+  { term:"Breakout",                   def:"When price moves decisively above a key resistance level, often on elevated volume. Signals that buyers have overcome supply and a new upward move is likely." },
+  { term:"Breakdown",                  def:"When price moves decisively below a key support level, often on elevated volume. Signals that sellers have overcome demand and a new downward move is likely." },
+  { term:"Consolidation",              def:"A period of sideways price movement within a defined range, reflecting a balance between buyers and sellers. Often precedes a significant breakout or breakdown." },
+  { term:"Moving Average",             def:"The average closing price over a set number of periods (e.g. 50-day or 200-day MA). Smooths price noise and identifies trend direction. Price above a moving average is generally bullish." },
+  { term:"RSI",                        def:"Relative Strength Index. A momentum oscillator scaled 0–100 measuring the speed of price changes. Above 70 suggests overbought conditions; below 30 suggests oversold." },
+  { term:"MACD",                       def:"Moving Average Convergence Divergence. A momentum indicator using two moving averages. A bullish crossover (MACD above signal line) suggests upward momentum; a bearish crossover suggests the reverse." },
+  { term:"Momentum",                   def:"The rate of acceleration in price movement. Strong momentum confirms a trend; fading momentum often precedes a reversal. Measured by RSI, MACD, and rate of change." },
+  { term:"Overbought",                 def:"A condition where a security has risen sharply and may be due for a pullback. Typically indicated by RSI above 70. Overbought assets can remain overbought in strong trends." },
+  { term:"Oversold",                   def:"A condition where a security has fallen sharply and may be due for a bounce. Typically indicated by RSI below 30. Oversold assets can remain oversold in strong downtrends." },
+  { term:"Retracement",                def:"A temporary price reversal against the prevailing trend before it resumes. Fibonacci retracement levels (38.2%, 50%, 61.8%) are common areas where price finds support during a pullback." },
+  { term:"Neckline",                   def:"In Head and Shoulders patterns, the trendline connecting the reaction lows (or highs). A decisive break of the neckline confirms the pattern and sets a price target." },
+  { term:"Higher High",                def:"When the most recent price peak exceeds the prior peak. A series of higher highs (and higher lows) defines an uptrend." },
+  { term:"Lower Low",                  def:"When the most recent trough falls below the prior trough. A series of lower lows (and lower highs) defines a downtrend." },
+  { term:"Stop Loss",                  def:"A pre-defined price at which a position is closed to cap losses. Critical risk management — prevents a small loss from becoming a large one if the trade moves against you." },
+  { term:"Volatility",                 def:"The degree of price variation over time. High volatility means larger swings and higher uncertainty; low volatility means more stable, predictable price action." },
+  { term:"Volume",                     def:"The total number of shares or coins traded in a given period. Volume confirms price moves — a breakout on high volume is more reliable than one on low volume." },
+  { term:"Candlestick",                def:"A chart bar showing the open, high, low, and close for a time period. Green candles close higher than they opened; red close lower. Patterns signal reversals or continuations." },
+  { term:"OHLCV",                      def:"Open, High, Low, Close, Volume — the five data points that make up each candlestick. The foundation of all technical chart analysis." },
+  { term:"Market Cap",                 def:"Total market capitalisation: share price × total shares outstanding. Used to classify companies — large-cap (>$10B), mid-cap ($2–10B), small-cap (<$2B)." },
+  { term:"Dollar Cost Averaging",      def:"Investing a fixed amount at regular intervals regardless of price. Reduces timing risk — you buy more units when cheap and fewer when expensive." },
+  { term:"P&L",                        def:"Profit and Loss. Unrealised P&L exists while the position is open; realised P&L is locked in when closed. Calculated as (current price − average cost) / average cost × 100%." },
+];
+
 const TABS = [
   { id:"dashboard", label:"Dashboard", icon:"◈" },
   { id:"explorer",  label:"Explorer",  icon:"◎" },
@@ -181,6 +225,28 @@ function parseTargetNum(targetStr) {
 }
 
 const nowTime = () => new Date().toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit" });
+
+// ── Glossary linkifier ─────────────────────────────────────────────────────
+function linkifyText(text, onTermClick) {
+  if (!text || !onTermClick) return text;
+  const sorted = [...GLOSSARY].sort((a, b) => b.term.length - a.term.length);
+  const escaped = sorted.map(g => g.term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const regex = new RegExp(`(${escaped.join("|")})`, "gi");
+  const parts = text.split(regex);
+  return parts.map((part, i) => {
+    const match = GLOSSARY.find(g => g.term.toLowerCase() === part.toLowerCase());
+    if (match) {
+      return (
+        <span key={i} onClick={() => onTermClick(match.term)}
+          style={{ color:"var(--amber)", borderBottom:"1px dotted #ffab4070", cursor:"pointer" }}
+          title={`Click to define: ${match.term}`}>
+          {part}
+        </span>
+      );
+    }
+    return part;
+  });
+}
 
 // ── Atoms ──────────────────────────────────────────────────────────────────
 function VerdictBadge({ v }) {
@@ -732,6 +798,40 @@ function ChartCanvas({ candles, analysis, range, currency }) {
   );
 }
 
+// ── Glossary modal ─────────────────────────────────────────────────────────
+function GlossaryModal({ open, onClose, focusTerm }) {
+  const termRefs = useRef({});
+  useEffect(() => {
+    if (open && focusTerm && termRefs.current[focusTerm]) {
+      setTimeout(() => termRefs.current[focusTerm].scrollIntoView({ behavior:"smooth", block:"center" }), 120);
+    }
+  }, [open, focusTerm]);
+  if (!open) return null;
+  const sorted = [...GLOSSARY].sort((a, b) => a.term.localeCompare(b.term));
+  return (
+    <div onClick={onClose} style={{ position:"fixed", inset:0, background:"#00000090", zIndex:1000, display:"flex", alignItems:"flex-start", justifyContent:"center", padding:"5vh 20px", overflowY:"auto" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background:"var(--surface)", border:"1px solid var(--border2)", borderRadius:16, padding:"28px 32px", maxWidth:660, width:"100%", marginBottom:40 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:24 }}>
+          <div>
+            <h2 style={{ fontFamily:"var(--ff-head)", fontSize:22, fontWeight:800, color:"var(--text2)", letterSpacing:"-0.02em" }}>Glossary</h2>
+            <p style={{ fontSize:11, color:"var(--muted)", fontFamily:"var(--ff-mono)", letterSpacing:"0.06em", marginTop:4 }}>{GLOSSARY.length} TERMS · HIGHLIGHTED WORDS IN ANALYSIS ARE CLICKABLE</p>
+          </div>
+          <button onClick={onClose} style={{ background:"none", border:"1px solid var(--border)", borderRadius:8, padding:"7px 16px", color:"var(--muted2)", fontSize:11, fontFamily:"var(--ff-mono)", letterSpacing:"0.06em", flexShrink:0 }}>CLOSE ✕</button>
+        </div>
+        <div style={{ maxHeight:"65vh", overflowY:"auto", paddingRight:4 }}>
+          {sorted.map(g => (
+            <div key={g.term} ref={el => { termRefs.current[g.term] = el; }}
+              style={{ padding:"14px", borderRadius:10, marginBottom:4, background: focusTerm===g.term ? "#ffab4012" : "none", border:`1px solid ${focusTerm===g.term ? "#ffab4040" : "transparent"}`, transition:"background .25s" }}>
+              <div style={{ fontFamily:"var(--ff-head)", fontSize:14, fontWeight:700, color: focusTerm===g.term ? "var(--amber)" : "var(--text2)", marginBottom:6 }}>{g.term}</div>
+              <p style={{ fontSize:13, color:"var(--muted2)", lineHeight:1.7, margin:0 }}>{g.def}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main App ───────────────────────────────────────────────────────────────
 export default function App() {
   const [tab,setTab]           = useState("dashboard");
@@ -796,6 +896,11 @@ export default function App() {
   const [explorerChart,setExplorerChart]               = useState(null);
   const [explorerChartLoading,setExplorerChartLoading] = useState(false);
   const [explorerAnalysis,setExplorerAnalysis]         = useState(null);
+
+  // Glossary
+  const [glossaryOpen,setGlossaryOpen] = useState(false);
+  const [glossaryTerm,setGlossaryTerm] = useState(null);
+  const openGlossary = t => { setGlossaryTerm(t||null); setGlossaryOpen(true); };
 
   // Persist CMC
   useEffect(() => { try { localStorage.setItem("inteliq_cmc", JSON.stringify(cmcHoldings)); } catch {} }, [cmcHoldings]);
@@ -1469,12 +1574,17 @@ export default function App() {
               </div>
 
               {/* range selector */}
-              <div style={{display:"flex",gap:4,marginBottom:12}}>
-                {["1d","7d","1mo","3mo","1y"].map(r=>(
-                  <button key={r} onClick={()=>setChartRange(r)} style={{background:chartRange===r?"var(--green)":"none",color:chartRange===r?"#0a0a14":"var(--muted2)",border:`1px solid ${chartRange===r?"var(--green)":"var(--border)"}`,borderRadius:7,padding:"5px 14px",fontSize:11,fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",fontWeight:chartRange===r?700:400}}>
-                    {r.toUpperCase()}
-                  </button>
-                ))}
+              <div style={{display:"flex",gap:4,marginBottom:12,alignItems:"center",justifyContent:"space-between",flexWrap:"wrap"}}>
+                <div style={{display:"flex",gap:4}}>
+                  {["1d","7d","1mo","3mo","1y"].map(r=>(
+                    <button key={r} onClick={()=>setChartRange(r)} style={{background:chartRange===r?"var(--green)":"none",color:chartRange===r?"#0a0a14":"var(--muted2)",border:`1px solid ${chartRange===r?"var(--green)":"var(--border)"}`,borderRadius:7,padding:"5px 14px",fontSize:11,fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",fontWeight:chartRange===r?700:400}}>
+                      {r.toUpperCase()}
+                    </button>
+                  ))}
+                </div>
+                <button onClick={()=>openGlossary()} style={{background:"none",border:"1px solid var(--border)",borderRadius:7,padding:"5px 14px",fontSize:11,fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",color:"var(--amber)"}}>
+                  ◈ GLOSSARY
+                </button>
               </div>
 
               {/* chart */}
@@ -1504,7 +1614,7 @@ export default function App() {
 
                   {/* Summary */}
                   <div className="card" style={{padding:20}}>
-                    <p style={{fontSize:13,color:"var(--muted2)",lineHeight:1.7,margin:0}}>{detailAnalysis.summary}</p>
+                    <p style={{fontSize:13,color:"var(--muted2)",lineHeight:1.7,margin:0}}>{linkifyText(detailAnalysis.summary, openGlossary)}</p>
                     {detailAnalysis.stopLoss && <div style={{marginTop:10,fontSize:12,fontFamily:"var(--ff-mono)",color:"var(--red)"}}>Stop loss: {detailAnalysis.stopLoss}</div>}
                   </div>
 
@@ -1526,7 +1636,7 @@ export default function App() {
                       ].filter(x=>x.v).map(({l,v},i,arr)=>(
                         <div key={l} style={{paddingBottom:i<arr.length-1?14:0,borderBottom:i<arr.length-1?"1px solid var(--border)":"none"}}>
                           <div style={{fontSize:9,fontFamily:"var(--ff-mono)",color:"var(--muted)",letterSpacing:"0.12em",marginBottom:5}}>{l}</div>
-                          <p style={{fontSize:13,color:"var(--muted2)",lineHeight:1.7,margin:0}}>{v}</p>
+                          <p style={{fontSize:13,color:"var(--muted2)",lineHeight:1.7,margin:0}}>{linkifyText(v, openGlossary)}</p>
                         </div>
                       ))}
                     </div>
@@ -1573,19 +1683,19 @@ export default function App() {
                             <span style={{fontFamily:"var(--ff-head)",fontSize:14,fontWeight:700,color:detailAnalysis.pattern.bullish?"var(--green)":"var(--red)"}}>{detailAnalysis.pattern.name}</span>
                             <span className="badge" style={{background:detailAnalysis.pattern.bullish?"#00e67618":"#ff525218",color:detailAnalysis.pattern.bullish?"var(--green)":"var(--red)",border:`1px solid ${detailAnalysis.pattern.bullish?"#00e67640":"#ff525240"}`}}>{detailAnalysis.pattern.bullish?"BULLISH":"BEARISH"}</span>
                           </div>
-                          {detailAnalysis.pattern.note && <p style={{fontSize:12,color:"var(--muted2)",lineHeight:1.6}}>{detailAnalysis.pattern.note}</p>}
+                          {detailAnalysis.pattern.note && <p style={{fontSize:12,color:"var(--muted2)",lineHeight:1.6}}>{linkifyText(detailAnalysis.pattern.note, openGlossary)}</p>}
                         </div>
                       )}
                       {detailAnalysis.momentum && (
                         <div style={{marginBottom:detailAnalysis.volume?14:0}}>
                           <div className="section-label">MOMENTUM</div>
-                          <p style={{fontSize:12,color:"var(--muted2)",lineHeight:1.6}}>{detailAnalysis.momentum}</p>
+                          <p style={{fontSize:12,color:"var(--muted2)",lineHeight:1.6}}>{linkifyText(detailAnalysis.momentum, openGlossary)}</p>
                         </div>
                       )}
                       {detailAnalysis.volume && (
                         <div>
                           <div className="section-label">VOLUME</div>
-                          <p style={{fontSize:12,color:"var(--muted2)",lineHeight:1.6}}>{detailAnalysis.volume}</p>
+                          <p style={{fontSize:12,color:"var(--muted2)",lineHeight:1.6}}>{linkifyText(detailAnalysis.volume, openGlossary)}</p>
                         </div>
                       )}
                     </div>
@@ -1597,6 +1707,7 @@ export default function App() {
 
         </main>
       </div>
+      <GlossaryModal open={glossaryOpen} onClose={()=>setGlossaryOpen(false)} focusTerm={glossaryTerm}/>
     </>
   );
 }
