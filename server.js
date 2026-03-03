@@ -15,6 +15,7 @@ const COINBASE_API_SECRET = process.env.COINBASE_API_SECRET || "";
 const COINSPOT_API_KEY    = process.env.COINSPOT_API_KEY    || "";
 const COINSPOT_API_SECRET = process.env.COINSPOT_API_SECRET || "";
 const FINNHUB_API_KEY     = process.env.FINNHUB_API_KEY     || "";
+const FMP_API_KEY         = process.env.FMP_API_KEY         || "";
 
 if (!ANTHROPIC_API_KEY) {
   console.error("❌ ANTHROPIC_API_KEY is not set in .env");
@@ -289,6 +290,84 @@ app.post("/api/prices", async (req, res) => {
   res.json(prices);
 });
 
+// ── Technical Indicator Math ───────────────────────────────────────────────
+function computeEMA(closes, period) {
+  const k = 2 / (period + 1);
+  const result = new Array(closes.length).fill(null);
+  if (closes.length < period) return result;
+  let sum = 0;
+  for (let i = 0; i < period; i++) sum += closes[i];
+  result[period - 1] = sum / period;
+  for (let i = period; i < closes.length; i++) {
+    result[i] = closes[i] * k + result[i - 1] * (1 - k);
+  }
+  return result;
+}
+
+function computeRSI(closes, period = 14) {
+  const result = new Array(closes.length).fill(null);
+  if (closes.length < period + 1) return result;
+  let avgGain = 0, avgLoss = 0;
+  for (let i = 1; i <= period; i++) {
+    const diff = closes[i] - closes[i - 1];
+    if (diff > 0) avgGain += diff; else avgLoss -= diff;
+  }
+  avgGain /= period; avgLoss /= period;
+  result[period] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+  for (let i = period + 1; i < closes.length; i++) {
+    const diff = closes[i] - closes[i - 1];
+    avgGain = (avgGain * (period - 1) + Math.max(0,  diff)) / period;
+    avgLoss = (avgLoss * (period - 1) + Math.max(0, -diff)) / period;
+    result[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+  }
+  return result;
+}
+
+function computeEMAOfSeries(series, period) {
+  const k = 2 / (period + 1);
+  const result = new Array(series.length).fill(null);
+  let count = 0, sum = 0, seedEnd = -1;
+  for (let i = 0; i < series.length; i++) {
+    if (series[i] == null) continue;
+    sum += series[i]; count++;
+    if (count === period) { seedEnd = i; break; }
+  }
+  if (seedEnd === -1) return result;
+  result[seedEnd] = sum / period;
+  for (let i = seedEnd + 1; i < series.length; i++) {
+    if (series[i] != null && result[i - 1] != null) {
+      result[i] = series[i] * k + result[i - 1] * (1 - k);
+    }
+  }
+  return result;
+}
+
+function computeMACD(closes, fast = 12, slow = 26, signal = 9) {
+  const emaFast = computeEMA(closes, fast);
+  const emaSlow = computeEMA(closes, slow);
+  const macd = closes.map((_, i) =>
+    emaFast[i] != null && emaSlow[i] != null ? emaFast[i] - emaSlow[i] : null
+  );
+  const signalArr = computeEMAOfSeries(macd, signal);
+  const histogram = macd.map((v, i) =>
+    v != null && signalArr[i] != null ? v - signalArr[i] : null
+  );
+  return { macd, signal: signalArr, histogram };
+}
+
+function computeBollingerBands(closes, period = 20, mult = 2) {
+  const upper = new Array(closes.length).fill(null);
+  const middle = new Array(closes.length).fill(null);
+  const lower = new Array(closes.length).fill(null);
+  for (let i = period - 1; i < closes.length; i++) {
+    const slice = closes.slice(i - period + 1, i + 1);
+    const sma = slice.reduce((a, b) => a + b, 0) / period;
+    const sd = Math.sqrt(slice.reduce((a, v) => a + Math.pow(v - sma, 2), 0) / period);
+    middle[i] = sma; upper[i] = sma + mult * sd; lower[i] = sma - mult * sd;
+  }
+  return { upper, middle, lower };
+}
+
 // ── Chart OHLCV data ───────────────────────────────────────────────────────
 const RANGE_CFG = {
   "1d":  { interval:"5m",  range:"1d"  },
@@ -317,13 +396,21 @@ app.get("/api/chart/:sym", async (req, res) => {
     const candles = timestamps
       .map((ts, i) => ({ t: ts * 1000, o: q.open?.[i], h: q.high?.[i], l: q.low?.[i], c: q.close?.[i], v: q.volume?.[i] }))
       .filter(c => c.o != null && c.h != null && c.l != null && c.c != null);
+    const closes = candles.map(c => c.c);
+    const indicators = {
+      ema50:  computeEMA(closes, 50),
+      ema200: computeEMA(closes, 200),
+      rsi:    computeRSI(closes, 14),
+      macd:   computeMACD(closes, 12, 26, 9),
+      bb:     computeBollingerBands(closes, 20, 2),
+    };
     res.json({
       sym: sym.toUpperCase(),
       name: meta.longName || meta.shortName || sym,
       currency: meta.currency || "USD",
       currentPrice: meta.regularMarketPrice,
       previousClose: meta.chartPreviousClose || meta.previousClose,
-      candles, range,
+      candles, range, indicators,
     });
   } catch (err) {
     console.error("Chart error:", err.message);
@@ -331,9 +418,61 @@ app.get("/api/chart/:sym", async (req, res) => {
   }
 });
 
+// ── FMP Fundamentals ───────────────────────────────────────────────────────
+app.get("/api/fundamentals/:sym", async (req, res) => {
+  const { sym } = req.params;
+  // Skip crypto — FMP has no reliable crypto data
+  if (COINGECKO_IDS[sym.toUpperCase()]) return res.json(null);
+  if (!FMP_API_KEY) return res.json(null);
+  const base = "https://financialmodelingprep.com/stable";
+  const key  = `apikey=${FMP_API_KEY}`;
+  try {
+    const [profileRes, metricsRes, ratiosRes, earningsRes] = await Promise.allSettled([
+      fetch(`${base}/profile?symbol=${sym}&${key}`).then(r => r.json()),
+      fetch(`${base}/key-metrics?symbol=${sym}&period=TTM&${key}`).then(r => r.json()),
+      fetch(`${base}/ratios?symbol=${sym}&period=TTM&${key}`).then(r => r.json()),
+      fetch(`${base}/earnings-surprises?symbol=${sym}&${key}`).then(r => r.json()),
+    ]);
+    const profile  = profileRes.status  === "fulfilled" ? profileRes.value?.[0]  : null;
+    const metrics  = metricsRes.status  === "fulfilled" ? metricsRes.value?.[0]  : null;
+    const ratios   = ratiosRes.status   === "fulfilled" ? ratiosRes.value?.[0]   : null;
+    const earnings = earningsRes.status === "fulfilled" ? earningsRes.value       : null;
+    if (!profile && !metrics && !ratios) return res.json(null);
+    const mc = profile?.marketCap || metrics?.marketCap;
+    const marketCap = mc
+      ? mc >= 1e12 ? `$${(mc/1e12).toFixed(2)}T`
+      : mc >= 1e9  ? `$${(mc/1e9).toFixed(1)}B`
+      : mc >= 1e6  ? `$${(mc/1e6).toFixed(0)}M` : null
+      : null;
+    const fcfYield = ratios?.priceToFreeCashFlowRatio > 0
+      ? (1 / ratios.priceToFreeCashFlowRatio) * 100 : null;
+    const earningsSurprises = Array.isArray(earnings) && earnings.length > 0
+      ? earnings.slice(0, 4).map(e => {
+          const pct = e.epsEstimated ? (e.epsActual - e.epsEstimated) / Math.abs(e.epsEstimated) * 100 : null;
+          return { date: e.date, epsActual: e.epsActual, epsEstimated: e.epsEstimated,
+            surprise: pct != null ? (pct >= 0 ? `+${pct.toFixed(1)}%` : `${pct.toFixed(1)}%`) : null };
+        })
+      : [];
+    res.json({
+      pe:         ratios?.priceToEarningsRatio  || null,
+      evEbitda:   metrics?.evToEBITDA            || null,
+      fcfYield,
+      debtEquity: ratios?.debtToEquityRatio      || null,
+      roe:        metrics?.returnOnEquity        || null,
+      marketCap,
+      sector:     profile?.industry              || null,
+      earningsSurprises,
+      analystConsensus: null,
+    });
+  } catch (err) {
+    console.error("FMP fundamentals error:", err.message);
+    res.json(null);
+  }
+});
+
 // ── Detailed technical analysis with chart annotations ─────────────────────
 app.post("/api/analyse/detail", async (req, res) => {
-  const { sym, name, candles, range, currentPrice, currency } = req.body;
+  const { sym, name, candles, range, currentPrice, currency, indicators, fundamentals } = req.body;
   if (!sym || !candles?.length) return res.status(400).json({ error: "sym and candles required" });
 
   const recent = candles.slice(-40);
@@ -349,6 +488,66 @@ app.post("/api/analyse/detail", async (req, res) => {
     vR: c.v && avgVol ? (c.v / avgVol).toFixed(1) : "—",
   }));
 
+  // Build fundamentals context block
+  let fundamentalsBlock = "";
+  if (fundamentals && typeof fundamentals === "object") {
+    const lines = [];
+    if (fundamentals.pe        != null) lines.push(`- P/E Ratio (TTM): ${Number(fundamentals.pe).toFixed(1)}x`);
+    if (fundamentals.evEbitda  != null) lines.push(`- EV/EBITDA: ${Number(fundamentals.evEbitda).toFixed(1)}x`);
+    if (fundamentals.fcfYield  != null) lines.push(`- FCF Yield: ${Number(fundamentals.fcfYield).toFixed(1)}%`);
+    if (fundamentals.debtEquity!= null) lines.push(`- Debt/Equity: ${Number(fundamentals.debtEquity).toFixed(2)}`);
+    if (fundamentals.roe       != null) lines.push(`- ROE: ${(Number(fundamentals.roe) * 100).toFixed(1)}%`);
+    if (fundamentals.marketCap)         lines.push(`- Market Cap: ${fundamentals.marketCap}`);
+    if (fundamentals.analystConsensus) {
+      const c = fundamentals.analystConsensus;
+      lines.push(`- Analyst Consensus: ${c.strongBuy} Strong Buy, ${c.buy} Buy, ${c.hold} Hold, ${c.sell} Sell`);
+    }
+    if (fundamentals.earningsSurprises?.length) {
+      const surprises = fundamentals.earningsSurprises.map(e => e.surprise).filter(Boolean).join(", ");
+      if (surprises) lines.push(`- Earnings Surprises (last ${fundamentals.earningsSurprises.length} quarters): ${surprises}`);
+    }
+    if (lines.length) fundamentalsBlock = `\n\nLIVE FUNDAMENTAL DATA (sourced from Financial Modeling Prep, current as of today):\n${lines.join("\n")}\nUse this live data (not training-data estimates) for your fundamental analysis section.`;
+  }
+
+  // Build indicators context block
+  let indicatorsBlock = "";
+  if (indicators && typeof indicators === "object") {
+    const lastVal = arr => { if (!Array.isArray(arr)) return null; for (let i = arr.length-1; i>=0; i--) if (arr[i]!=null) return arr[i]; return null; };
+    const lastPrice = candles[candles.length - 1]?.c ?? currentPrice;
+    const rsiVal   = lastVal(indicators.rsi);
+    const macdVal  = lastVal(indicators.macd?.macd);
+    const sigVal   = lastVal(indicators.macd?.signal);
+    const histVal  = lastVal(indicators.macd?.histogram);
+    const bbUpper  = lastVal(indicators.bb?.upper);
+    const bbMiddle = lastVal(indicators.bb?.middle);
+    const bbLower  = lastVal(indicators.bb?.lower);
+    const ema50    = lastVal(indicators.ema50);
+    const ema200   = lastVal(indicators.ema200);
+    const f = v => v == null ? null : (Math.abs(v) >= 10 ? v.toFixed(2) : Math.abs(v) >= 0.01 ? v.toFixed(4) : v.toFixed(6));
+    const lines = [];
+    if (rsiVal != null) {
+      const note = rsiVal > 70 ? "overbought" : rsiVal < 30 ? "oversold" : rsiVal > 60 ? "approaching overbought" : rsiVal < 40 ? "approaching oversold" : "neutral";
+      lines.push(`- RSI(14): ${rsiVal.toFixed(1)} (${note})`);
+    }
+    if (macdVal != null && sigVal != null && histVal != null) {
+      lines.push(`- MACD: ${f(macdVal)} / Signal: ${f(sigVal)} / Histogram: ${histVal>=0?"+":""}${f(histVal)} (${histVal>=0?"bullish momentum":"bearish momentum"})`);
+    }
+    if (bbUpper != null && bbMiddle != null && bbLower != null && lastPrice) {
+      const bw = bbUpper - bbLower;
+      const pctB = bw > 0 ? ((lastPrice - bbLower) / bw * 100).toFixed(0) : null;
+      lines.push(`- Bollinger Bands: Upper ${bbUpper.toFixed(2)} / Middle ${bbMiddle.toFixed(2)} / Lower ${bbLower.toFixed(2)}${pctB!=null?` → Price at ${pctB}% of band width`:""}`);
+    }
+    if (ema50 != null && ema200 != null) {
+      const cross = ema50 > ema200 ? "Golden Cross (EMA50 > EMA200, bullish)" : "Death Cross (EMA50 < EMA200, bearish)";
+      const pct = ((lastPrice - ema50) / ema50 * 100).toFixed(1);
+      lines.push(`- EMA50: ${ema50.toFixed(2)} / EMA200: ${ema200.toFixed(2)} → ${cross} / Price ${pct>0?"+":""}${pct}% vs EMA50`);
+    } else if (ema50 != null) {
+      const pct = ((lastPrice - ema50) / ema50 * 100).toFixed(1);
+      lines.push(`- EMA50: ${ema50.toFixed(2)} → Price ${pct>0?"+":""}${pct}% vs EMA50`);
+    }
+    if (lines.length) indicatorsBlock = `\n\nCOMPUTED TECHNICAL INDICATORS (calculated from the live OHLCV data above):\n${lines.join("\n")}\nReference these computed values in your technical analysis section.`;
+  }
+
   try {
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -358,7 +557,7 @@ app.post("/api/analyse/detail", async (req, res) => {
         max_tokens: 1500,
         system: `You are a senior investment analyst. Today is ${new Date().toLocaleDateString("en-AU",{year:"numeric",month:"long",day:"numeric"})}. You have been given live OHLCV chart data for this asset. Using this chart data AND your knowledge of the asset's fundamentals, sector dynamics, macro environment, and market conditions as of today, produce a single unified investment analysis with ONE verdict. Integrate technical signals from the chart with fundamental and macro factors — do not treat them as separate signals. The current live price is the closing price of the most recent candle. Return ONLY valid JSON (no markdown fences):
 {"verdict":"BUY|WATCH|AVOID|HOLD","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","target":"$X","stopLoss":"$X","summary":"2-3 sentences combining all factors","macro":"2-3 sentences","fundamental":"2-3 sentences","technical":"2-3 sentences based on the chart data","sentiment":"2-3 sentences","portfolio":"2-3 sentences","support":[{"price":0.0,"label":"Label","strength":"STRONG|MEDIUM|WEAK"}],"resistance":[{"price":0.0,"label":"Label","strength":"STRONG|MEDIUM|WEAK"}],"pattern":{"name":"Pattern name or null","bullish":true,"note":"1 sentence"},"momentum":"1-2 sentences","volume":"1 sentence"}
-Provide 1-3 support and 1-3 resistance levels using actual prices from the data.`,
+Provide 1-3 support and 1-3 resistance levels using actual prices from the data.${fundamentalsBlock}${indicatorsBlock}`,
         messages: [{ role: "user", content: `Symbol: ${sym} (${name})\nCurrent: ${currentPrice} ${currency} | Range: ${range} | Change: ${chgPct}%\nPrice range: ${minP?.toFixed(2)} – ${maxP?.toFixed(2)}\n\nOHLCV (i=candle index, vR=vol vs avg):\n${JSON.stringify(summary)}` }],
       })
     });
@@ -536,6 +735,7 @@ app.get("/health", (_, res) => res.json({
   coinbase:  !!(COINBASE_API_KEY && COINBASE_API_SECRET),
   coinspot:  !!(COINSPOT_API_KEY && COINSPOT_API_SECRET),
   finnhub:   !!FINNHUB_API_KEY,
+  fmp:       !!FMP_API_KEY,
 }));
 
 app.listen(PORT, () => {
@@ -544,4 +744,5 @@ app.listen(PORT, () => {
   console.log(`   Coinbase:  ${COINBASE_API_KEY  ? "✓" : "✗ not configured"}`);
   console.log(`   CoinSpot:  ${COINSPOT_API_KEY  ? "✓" : "✗ not configured"}`);
   console.log(`   Finnhub:   ${FINNHUB_API_KEY   ? "✓" : "✗ optional"}`);
+  console.log(`   FMP:       ${FMP_API_KEY        ? "✓" : "✗ not configured (fundamentals disabled)"}`);
 });

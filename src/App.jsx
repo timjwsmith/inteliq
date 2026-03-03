@@ -628,7 +628,7 @@ function NewsCard({ item }) {
 
 
 // ── Chart canvas ───────────────────────────────────────────────────────────
-function ChartCanvas({ candles, analysis, range, currency }) {
+function ChartCanvas({ candles, analysis, range, currency, indicators }) {
   const canvasRef   = useRef(null);
   const containerRef = useRef(null);
   const [canvasW, setCanvasW] = useState(0);
@@ -643,7 +643,7 @@ function ChartCanvas({ candles, analysis, range, currency }) {
     return () => obs.disconnect();
   }, []);
 
-  useEffect(() => { draw(hovIdx); }, [candles, analysis, canvasW, hovIdx]);
+  useEffect(() => { draw(hovIdx); }, [candles, analysis, canvasW, hovIdx, indicators]);
 
   function fmt(p) {
     if (!p && p !== 0) return "—";
@@ -660,15 +660,26 @@ function ChartCanvas({ candles, analysis, range, currency }) {
     const canvas = canvasRef.current;
     if (!canvas || !candles?.length || !canvasW) return;
 
-    const W = canvasW, H = 420;
+    // Determine if we have meaningful indicator data to show sub-panels
+    const hasIndicators = !!(indicators && (
+      indicators.rsi?.some(v => v != null) ||
+      indicators.macd?.macd?.some(v => v != null)
+    ));
+
+    const W = canvasW;
+    const PL = 8, PR = 68, PT = 14, CHART_H = 290, VOL_H = 58, GAP = 12, PB = 28;
+    const RSI_H = 80, MACD_H = 80, GAP2 = 8, GAP3 = 6;
+    const H = hasIndicators
+      ? PT + CHART_H + GAP + VOL_H + GAP2 + RSI_H + GAP3 + MACD_H + PB
+      : 420;
     canvas.width = W; canvas.height = H;
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, W, H);
 
-    // layout
-    const PL = 8, PR = 68, PT = 14, CHART_H = 290, VOL_H = 58, GAP = 12, PB = 28;
-    const chartW = W - PL - PR;
-    const volTop = PT + CHART_H + GAP;
+    const chartW  = W - PL - PR;
+    const volTop  = PT + CHART_H + GAP;
+    const rsiTop  = volTop + VOL_H + GAP2;
+    const macdTop = rsiTop + RSI_H + GAP3;
 
     // data bounds
     const hs = candles.map(c=>c.h).filter(Boolean);
@@ -681,10 +692,17 @@ function ChartCanvas({ candles, analysis, range, currency }) {
     const n = candles.length;
     const toX = i => PL + (n > 1 ? (i / (n-1)) * chartW : chartW/2);
     const toY = p => PT + ((maxP - p) / pRange) * CHART_H;
-    const cW   = Math.max(1.5, (chartW / n) * 0.65);
+    const cW  = Math.max(1.5, (chartW / n) * 0.65);
 
     // bg
     ctx.fillStyle = "#1a1630"; ctx.fillRect(0, 0, W, H);
+
+    // sub-panel backgrounds
+    if (hasIndicators) {
+      ctx.fillStyle = "#15122a";
+      ctx.fillRect(0, rsiTop - 1, W, RSI_H + 2);
+      ctx.fillRect(0, macdTop - 1, W, MACD_H + 2);
+    }
 
     // grid + price axis
     const GRID = 5;
@@ -695,6 +713,95 @@ function ChartCanvas({ candles, analysis, range, currency }) {
       ctx.beginPath(); ctx.moveTo(PL, y); ctx.lineTo(W - PR, y); ctx.stroke();
       ctx.fillStyle = "#7b7599"; ctx.font = "9px DM Mono,monospace"; ctx.textAlign = "left";
       ctx.fillText(fmt(p), W - PR + 5, y + 3);
+    }
+
+    // ── BB + EMA overlays (drawn behind candles) ──
+    if (hasIndicators) {
+      ctx.save();
+      ctx.beginPath(); ctx.rect(PL, PT, chartW, CHART_H); ctx.clip();
+
+      const bb   = indicators.bb;
+      const ema50  = indicators.ema50;
+      const ema200 = indicators.ema200;
+
+      // Bollinger Bands fill + lines
+      if (bb?.upper?.some(v => v != null)) {
+        const upperPts = [], lowerPts = [];
+        for (let i = 0; i < n; i++) {
+          if (bb.upper[i] != null && bb.lower[i] != null) {
+            upperPts.push([toX(i), toY(bb.upper[i])]);
+            lowerPts.push([toX(i), toY(bb.lower[i])]);
+          }
+        }
+        if (upperPts.length >= 2) {
+          // Fill
+          ctx.beginPath();
+          ctx.moveTo(upperPts[0][0], upperPts[0][1]);
+          for (let i = 1; i < upperPts.length; i++) ctx.lineTo(upperPts[i][0], upperPts[i][1]);
+          for (let i = lowerPts.length-1; i >= 0; i--) ctx.lineTo(lowerPts[i][0], lowerPts[i][1]);
+          ctx.closePath(); ctx.fillStyle = "#448aff0c"; ctx.fill();
+          // Upper line
+          ctx.beginPath();
+          ctx.moveTo(upperPts[0][0], upperPts[0][1]);
+          for (let i = 1; i < upperPts.length; i++) ctx.lineTo(upperPts[i][0], upperPts[i][1]);
+          ctx.strokeStyle = "#448aff50"; ctx.lineWidth = 1; ctx.setLineDash([]); ctx.stroke();
+          // Lower line
+          ctx.beginPath();
+          ctx.moveTo(lowerPts[0][0], lowerPts[0][1]);
+          for (let i = 1; i < lowerPts.length; i++) ctx.lineTo(lowerPts[i][0], lowerPts[i][1]);
+          ctx.strokeStyle = "#448aff50"; ctx.lineWidth = 1; ctx.stroke();
+          // Middle dashed
+          ctx.setLineDash([4, 3]);
+          ctx.beginPath(); let _s = false;
+          for (let i = 0; i < n; i++) {
+            if (bb.middle[i] == null) { _s = false; continue; }
+            const x = toX(i), y = toY(bb.middle[i]);
+            if (!_s) { ctx.moveTo(x, y); _s = true; } else ctx.lineTo(x, y);
+          }
+          ctx.strokeStyle = "#448aff30"; ctx.lineWidth = 1; ctx.stroke();
+          ctx.setLineDash([]);
+        }
+      }
+
+      // EMA50
+      if (ema50?.some(v => v != null)) {
+        ctx.beginPath(); let _s = false;
+        for (let i = 0; i < n; i++) {
+          if (ema50[i] == null) { _s = false; continue; }
+          const x = toX(i), y = toY(ema50[i]);
+          if (!_s) { ctx.moveTo(x, y); _s = true; } else ctx.lineTo(x, y);
+        }
+        ctx.strokeStyle = "#448aff99"; ctx.lineWidth = 1; ctx.stroke();
+      }
+
+      // EMA200
+      if (ema200?.some(v => v != null)) {
+        ctx.beginPath(); let _s = false;
+        for (let i = 0; i < n; i++) {
+          if (ema200[i] == null) { _s = false; continue; }
+          const x = toX(i), y = toY(ema200[i]);
+          if (!_s) { ctx.moveTo(x, y); _s = true; } else ctx.lineTo(x, y);
+        }
+        ctx.strokeStyle = "#ffab4099"; ctx.lineWidth = 1; ctx.stroke();
+      }
+
+      ctx.restore();
+
+      // Indicator legend (top-left of price chart)
+      ctx.font = "7px DM Mono,monospace"; ctx.textAlign = "left";
+      let lx = PL + 8;
+      if (bb?.upper?.some(v => v != null)) {
+        ctx.fillStyle = "#448aff70"; ctx.fillRect(lx, PT + 6, 8, 1.5);
+        ctx.fillStyle = "#7b7599cc"; ctx.fillText("BB", lx + 11, PT + 12); lx += 30;
+      }
+      if (ema50?.some(v => v != null)) {
+        ctx.fillStyle = "#448affcc"; ctx.fillRect(lx, PT + 6, 8, 1.5);
+        ctx.fillStyle = "#7b7599cc"; ctx.fillText("EMA50", lx + 11, PT + 12); lx += 52;
+      }
+      if (ema200?.some(v => v != null)) {
+        ctx.fillStyle = "#ffab40cc"; ctx.fillRect(lx, PT + 6, 8, 1.5);
+        ctx.fillStyle = "#7b7599cc"; ctx.fillText("EMA200", lx + 11, PT + 12);
+      }
     }
 
     // support lines
@@ -770,6 +877,124 @@ function ChartCanvas({ candles, analysis, range, currency }) {
     if (analysis?.pattern?.name && analysis.pattern.name !== "null") {
       ctx.fillStyle = "#ffab40cc"; ctx.font = "bold 10px DM Mono,monospace"; ctx.textAlign = "left";
       ctx.fillText(`◈ ${analysis.pattern.name}`, PL + 10, PT + 18);
+    }
+
+    if (!hasIndicators) return;
+
+    // ── RSI panel ──────────────────────────────────────────────────────────
+    const rsi = indicators.rsi;
+    if (rsi?.some(v => v != null)) {
+      ctx.strokeStyle = "#332e5060"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(0, rsiTop); ctx.lineTo(W, rsiTop); ctx.stroke();
+
+      ctx.fillStyle = "#7b7599"; ctx.font = "8px DM Mono,monospace"; ctx.textAlign = "left";
+      ctx.fillText("RSI(14)", PL, rsiTop + 10);
+
+      const rsiToY = v => rsiTop + ((100 - v) / 100) * RSI_H;
+
+      // Reference lines
+      ctx.setLineDash([3, 3]);
+      ctx.strokeStyle = "#ff525240"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(PL, rsiToY(70)); ctx.lineTo(W - PR, rsiToY(70)); ctx.stroke();
+      ctx.fillStyle = "#ff5252aa"; ctx.font = "7px DM Mono,monospace"; ctx.textAlign = "left";
+      ctx.fillText("70", W - PR + 3, rsiToY(70) + 3);
+
+      ctx.strokeStyle = "#00e67640"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(PL, rsiToY(30)); ctx.lineTo(W - PR, rsiToY(30)); ctx.stroke();
+      ctx.fillStyle = "#00e676aa";
+      ctx.fillText("30", W - PR + 3, rsiToY(30) + 3);
+      ctx.setLineDash([]);
+
+      // Per-bar fills for overbought/oversold zones
+      const barW = Math.max(1, (chartW / n) * 0.9);
+      for (let i = 0; i < n; i++) {
+        if (rsi[i] == null) continue;
+        const x = toX(i);
+        if (rsi[i] > 70) {
+          ctx.fillStyle = "#ff525220";
+          ctx.fillRect(x - barW/2, rsiToY(Math.min(100, rsi[i])), barW, rsiToY(70) - rsiToY(Math.min(100, rsi[i])));
+        } else if (rsi[i] < 30) {
+          ctx.fillStyle = "#00e67620";
+          ctx.fillRect(x - barW/2, rsiToY(30), barW, rsiToY(Math.max(0, rsi[i])) - rsiToY(30));
+        }
+      }
+
+      // RSI line (clipped)
+      ctx.save(); ctx.beginPath(); ctx.rect(PL, rsiTop, chartW, RSI_H); ctx.clip();
+      ctx.beginPath(); let _s = false;
+      for (let i = 0; i < n; i++) {
+        if (rsi[i] == null) { _s = false; continue; }
+        const x = toX(i), y = rsiToY(rsi[i]);
+        if (!_s) { ctx.moveTo(x, y); _s = true; } else ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = "#a89ec0"; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.restore();
+
+      // Current RSI value label
+      for (let i = n-1; i >= 0; i--) {
+        if (rsi[i] != null) {
+          ctx.fillStyle = "#a89ec0cc"; ctx.font = "7px DM Mono,monospace"; ctx.textAlign = "left";
+          ctx.fillText(rsi[i].toFixed(1), W - PR + 3, rsiToY(Math.max(0, Math.min(100, rsi[i]))) + 3);
+          break;
+        }
+      }
+    }
+
+    // ── MACD panel ─────────────────────────────────────────────────────────
+    const macd = indicators.macd;
+    if (macd?.macd?.some(v => v != null)) {
+      ctx.strokeStyle = "#332e5060"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(0, macdTop); ctx.lineTo(W, macdTop); ctx.stroke();
+
+      ctx.fillStyle = "#7b7599"; ctx.font = "8px DM Mono,monospace"; ctx.textAlign = "left";
+      ctx.fillText("MACD", PL, macdTop + 10);
+
+      const allVals = [...(macd.macd||[]), ...(macd.signal||[]), ...(macd.histogram||[])].filter(v => v != null);
+      if (allVals.length > 0) {
+        const mMax = Math.max(...allVals);
+        const mMin = Math.min(...allVals);
+        const mRange = mMax - mMin || 0.0001;
+        const macdToY = v => macdTop + ((mMax - v) / mRange) * MACD_H;
+        const zeroY = macdToY(0);
+
+        // Zero line
+        ctx.setLineDash([3, 3]);
+        ctx.strokeStyle = "#ffffff20"; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(PL, zeroY); ctx.lineTo(W - PR, zeroY); ctx.stroke();
+        ctx.setLineDash([]);
+
+        ctx.save(); ctx.beginPath(); ctx.rect(PL, macdTop, chartW, MACD_H); ctx.clip();
+
+        // Histogram bars
+        const bw2 = Math.max(1, (chartW / n) * 0.65);
+        for (let i = 0; i < n; i++) {
+          if (macd.histogram[i] == null) continue;
+          const x = toX(i), y = macdToY(macd.histogram[i]);
+          const h = Math.abs(y - zeroY);
+          ctx.fillStyle = macd.histogram[i] >= 0 ? "#00e67640" : "#ff525240";
+          ctx.fillRect(x - bw2/2, Math.min(y, zeroY), bw2, h);
+        }
+
+        // MACD line (blue)
+        ctx.beginPath(); let _s = false;
+        for (let i = 0; i < n; i++) {
+          if (macd.macd[i] == null) { _s = false; continue; }
+          const x = toX(i), y = macdToY(macd.macd[i]);
+          if (!_s) { ctx.moveTo(x, y); _s = true; } else ctx.lineTo(x, y);
+        }
+        ctx.strokeStyle = "#448aff99"; ctx.lineWidth = 1.5; ctx.stroke();
+
+        // Signal line (amber)
+        ctx.beginPath(); _s = false;
+        for (let i = 0; i < n; i++) {
+          if (macd.signal[i] == null) { _s = false; continue; }
+          const x = toX(i), y = macdToY(macd.signal[i]);
+          if (!_s) { ctx.moveTo(x, y); _s = true; } else ctx.lineTo(x, y);
+        }
+        ctx.strokeStyle = "#ffab4099"; ctx.lineWidth = 1.5; ctx.stroke();
+
+        ctx.restore();
+      }
     }
   }
 
@@ -1066,9 +1291,15 @@ export default function App() {
   async function fetchDetailAnalysis(data) {
     setDetailAnalysing(true);
     try {
+      // Fetch fundamentals (server returns null for crypto/unknown)
+      let fundamentals = null;
+      try {
+        const fr = await fetch(`/api/fundamentals/${encodeURIComponent(data.sym)}`);
+        fundamentals = await fr.json();
+      } catch {}
       const r = await fetch("/api/analyse/detail", {
         method:"POST", headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({ sym:data.sym, name:data.name, candles:data.candles, range:data.range, currentPrice:data.currentPrice, currency:data.currency })
+        body:JSON.stringify({ sym:data.sym, name:data.name, candles:data.candles, range:data.range, currentPrice:data.currentPrice, currency:data.currency, indicators:data.indicators, fundamentals })
       });
       const d = await r.json();
       if (!d.error) {
@@ -1087,24 +1318,45 @@ export default function App() {
     setSearching(true); setResult(null); setSearchErr(null); setExplorerAnalysis(null); setExplorerChart(null);
     try {
       const today = new Date().toLocaleDateString("en-AU",{year:"numeric",month:"long",day:"numeric"});
-      // Pre-fetch live price so Claude uses the real current price in technical analysis
       const KNOWN_CRYPTO = ["BTC","ETH","SOL","BNB","XRP","ADA","DOGE","AVAX","DOT","MATIC","LINK","UNI","LTC","BCH","ATOM","SHIB","TRX","TON","OP","ARB","NEAR","GRT","NU"];
       const upperQ = searchQ.trim().toUpperCase();
+      const isKnownCrypto = KNOWN_CRYPTO.includes(upperQ);
+      const isTickerLike = /^[A-Z0-9.]{1,8}$/.test(upperQ);
+      const priceType = isKnownCrypto ? "crypto" : "stock";
+      // Parallel: live price + fundamentals (if ticker-like and not crypto)
       let livePriceCtx = "";
-      try {
-        const isKnownCrypto = KNOWN_CRYPTO.includes(upperQ);
-        const isTickerLike = /^[A-Z0-9.]{1,8}$/.test(upperQ);
-        if (isTickerLike) {
-          const priceType = isKnownCrypto ? "crypto" : "stock";
-          const pd = await fetch(`/api/price?sym=${upperQ}&type=${priceType}`).then(r=>r.json());
-          if (pd.price) livePriceCtx = ` The current live market price is $${pd.price.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})} USD as of today — base all price levels, support/resistance, and targets on this actual price.`;
+      let fundamentals = null;
+      if (isTickerLike) {
+        try {
+          const parallelFetches = [
+            fetch(`/api/price?sym=${upperQ}&type=${priceType}`).then(r=>r.json()).catch(()=>null),
+            ...(!isKnownCrypto ? [fetch(`/api/fundamentals/${upperQ}`).then(r=>r.json()).catch(()=>null)] : []),
+          ];
+          const [pd, fmpData] = await Promise.all(parallelFetches);
+          if (pd?.price) livePriceCtx = ` The current live market price is $${pd.price.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})} USD as of today — base all price levels, support/resistance, and targets on this actual price.`;
+          if (fmpData) fundamentals = fmpData;
+        } catch {}
+      }
+      // Build fundamentals context for initial analyse call
+      let fundamentalsCtx = "";
+      if (fundamentals) {
+        const parts = [];
+        if (fundamentals.pe)        parts.push(`P/E: ${Number(fundamentals.pe).toFixed(1)}x`);
+        if (fundamentals.evEbitda)  parts.push(`EV/EBITDA: ${Number(fundamentals.evEbitda).toFixed(1)}x`);
+        if (fundamentals.fcfYield)  parts.push(`FCF Yield: ${Number(fundamentals.fcfYield).toFixed(1)}%`);
+        if (fundamentals.roe)       parts.push(`ROE: ${(Number(fundamentals.roe)*100).toFixed(1)}%`);
+        if (fundamentals.marketCap) parts.push(`Mkt Cap: ${fundamentals.marketCap}`);
+        if (fundamentals.analystConsensus) {
+          const c = fundamentals.analystConsensus;
+          parts.push(`Analyst: ${c.strongBuy}×SB/${c.buy}×B/${c.hold}×H/${c.sell}×S`);
         }
-      } catch {}
+        if (parts.length) fundamentalsCtx = `\n\nLIVE FUNDAMENTALS (FMP): ${parts.join(" | ")}\nUse this live data for your fundamental analysis.`;
+      }
       const res = await fetch("/api/analyse", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({
         model:"claude-sonnet-4-20250514", max_tokens:1000,
         system:`You are a senior investment analyst. Today is ${today}. Your training knowledge has a cutoff of approximately mid-2025 — do NOT present specific metrics from your training data (e.g. ETF flow volumes, exact hash rates, specific institutional inflow figures, dated earnings numbers) as if they are current facts for ${today}. For fundamentals, focus on structural and qualitative factors. If you cite a specific metric that may have changed, frame it as approximate or add "as of mid-2025". All macro commentary must reflect conditions as of ${today} — do not reference past rate decisions or events as if they are upcoming. For crypto assets (BTC, ETH, SOL etc) analyse the native coin/token directly — do NOT substitute an ETF or trust product. Respond ONLY with valid JSON, no markdown:
 {"sym":"TICKER","name":"Full name","sector":"sector","verdict":"BUY|WATCH|AVOID|HOLD","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","priceStatic":123.45,"target":"$X","upside":"+X%","up":true,"priceType":"stock or crypto","avgCurrency":"USD or AUD","priceCurrency":"USD or AUD","summary":"2-3 sentences","macro":"2-3 sentences","fundamental":"2-3 sentences","technical":"2-3 sentences","sentiment":"2-3 sentences","insider":"2-3 sentences","portfolio":"2-3 sentences"}`,
-        messages:[{role:"user",content:`Analyse this investment: ${searchQ}.${livePriceCtx}`}]
+        messages:[{role:"user",content:`Analyse this investment: ${searchQ}.${livePriceCtx}${fundamentalsCtx}`}]
       })});
       const data = await res.json();
       const text = data.content?.find(b=>b.type==="text")?.text||"";
@@ -1118,9 +1370,14 @@ export default function App() {
         .then(r=>r.json()).then(async d=>{
           if(!d.error){
             setExplorerChart(d);
+            // Fetch fundamentals for the parsed symbol (may differ from search query)
+            let detailFundamentals = null;
+            if (parsed.priceType !== "crypto") {
+              try { detailFundamentals = await fetch(`/api/fundamentals/${encodeURIComponent(parsed.sym)}`).then(r=>r.json()); } catch {}
+            }
             // Run comprehensive analysis and update card verdict to match
             try {
-              const ar = await fetch("/api/analyse/detail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});
+              const ar = await fetch("/api/analyse/detail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...d, fundamentals:detailFundamentals})});
               const analysis = await ar.json();
               if(!analysis.error){
                 setExplorerAnalysis(analysis);
@@ -1316,7 +1573,7 @@ export default function App() {
                           FULL ANALYSIS →
                         </button>
                       </div>
-                      <ChartCanvas candles={explorerChart.candles} analysis={null} range="1mo" currency={explorerChart.currency}/>
+                      <ChartCanvas candles={explorerChart.candles} analysis={null} range="1mo" currency={explorerChart.currency} indicators={explorerChart.indicators}/>
                     </div>
                   )}
                   <button onClick={()=>{setResult(null);setSearchQ("");setExplorerChart(null);}} style={{marginTop:8,background:"none",border:"none",fontSize:10,color:"var(--muted)",fontFamily:"var(--ff-mono)",padding:0,letterSpacing:"0.06em",cursor:"pointer"}}>
@@ -1660,7 +1917,7 @@ export default function App() {
                   </div>
                 )}
                 {!chartLoading && chartData?.candles?.length > 0 && (
-                  <ChartCanvas candles={chartData.candles} analysis={detailAnalysis} range={chartRange} currency={chartData.currency}/>
+                  <ChartCanvas candles={chartData.candles} analysis={detailAnalysis} range={chartRange} currency={chartData.currency} indicators={chartData.indicators}/>
                 )}
                 {!chartLoading && !chartData && (
                   <div style={{height:420,display:"flex",alignItems:"center",justifyContent:"center"}}>
