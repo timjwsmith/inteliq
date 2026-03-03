@@ -725,7 +725,7 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
 
     const W = canvasW;
     const PL = 8, PR = 68, PT = 14, CHART_H = 290, VOL_H = 58, GAP = 12, PB = 28;
-    const RSI_H = 80, MACD_H = 80, GAP2 = 8, GAP3 = 6;
+    const RSI_H = 90, MACD_H = 90, GAP2 = 10, GAP3 = 8;
     const H = hasIndicators
       ? PT + CHART_H + GAP + VOL_H + GAP2 + RSI_H + GAP3 + MACD_H + PB
       : 420;
@@ -756,9 +756,13 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
 
     // sub-panel backgrounds
     if (hasIndicators) {
-      ctx.fillStyle = "#15122a";
+      ctx.fillStyle = "#13112600";
       ctx.fillRect(0, rsiTop - 1, W, RSI_H + 2);
       ctx.fillRect(0, macdTop - 1, W, MACD_H + 2);
+      // Subtle border between panels
+      ctx.strokeStyle = "#332e5045"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(0, rsiTop - 1); ctx.lineTo(W, rsiTop - 1); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, macdTop - 1); ctx.lineTo(W, macdTop - 1); ctx.stroke();
     }
 
     // grid + price axis
@@ -951,14 +955,14 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
 
       // Reference lines
       ctx.setLineDash([3, 3]);
-      ctx.strokeStyle = "#ff525240"; ctx.lineWidth = 1;
+      ctx.strokeStyle = "#ff525265"; ctx.lineWidth = 1;
       ctx.beginPath(); ctx.moveTo(PL, rsiToY(70)); ctx.lineTo(W - PR, rsiToY(70)); ctx.stroke();
-      ctx.fillStyle = "#ff5252aa"; ctx.font = "7px DM Mono,monospace"; ctx.textAlign = "left";
+      ctx.fillStyle = "#ff5252cc"; ctx.font = "8px DM Mono,monospace"; ctx.textAlign = "left";
       ctx.fillText("70", W - PR + 3, rsiToY(70) + 3);
 
-      ctx.strokeStyle = "#00e67640"; ctx.lineWidth = 1;
+      ctx.strokeStyle = "#00e67665"; ctx.lineWidth = 1;
       ctx.beginPath(); ctx.moveTo(PL, rsiToY(30)); ctx.lineTo(W - PR, rsiToY(30)); ctx.stroke();
-      ctx.fillStyle = "#00e676aa";
+      ctx.fillStyle = "#00e676cc";
       ctx.fillText("30", W - PR + 3, rsiToY(30) + 3);
       ctx.setLineDash([]);
 
@@ -968,10 +972,10 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
         if (rsi[i] == null) continue;
         const x = toX(i);
         if (rsi[i] > 70) {
-          ctx.fillStyle = "#ff525220";
+          ctx.fillStyle = "#ff525235";
           ctx.fillRect(x - barW/2, rsiToY(Math.min(100, rsi[i])), barW, rsiToY(70) - rsiToY(Math.min(100, rsi[i])));
         } else if (rsi[i] < 30) {
-          ctx.fillStyle = "#00e67620";
+          ctx.fillStyle = "#00e67635";
           ctx.fillRect(x - barW/2, rsiToY(30), barW, rsiToY(Math.max(0, rsi[i])) - rsiToY(30));
         }
       }
@@ -984,14 +988,16 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
         const x = toX(i), y = rsiToY(rsi[i]);
         if (!_s) { ctx.moveTo(x, y); _s = true; } else ctx.lineTo(x, y);
       }
-      ctx.strokeStyle = "#a89ec0"; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.strokeStyle = "#e8e4f0"; ctx.lineWidth = 2; ctx.stroke();
       ctx.restore();
 
       // Current RSI value label
       for (let i = n-1; i >= 0; i--) {
         if (rsi[i] != null) {
-          ctx.fillStyle = "#a89ec0cc"; ctx.font = "7px DM Mono,monospace"; ctx.textAlign = "left";
-          ctx.fillText(rsi[i].toFixed(1), W - PR + 3, rsiToY(Math.max(0, Math.min(100, rsi[i]))) + 3);
+          const rsiVal = rsi[i];
+          const labelColor = rsiVal > 70 ? "#ff5252" : rsiVal < 30 ? "#00e676" : "#e8e4f0";
+          ctx.fillStyle = labelColor; ctx.font = "8px DM Mono,monospace"; ctx.textAlign = "left";
+          ctx.fillText(rsiVal.toFixed(1), W - PR + 3, rsiToY(Math.max(0, Math.min(100, rsiVal))) + 3);
           break;
         }
       }
@@ -1016,7 +1022,7 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
 
         // Zero line
         ctx.setLineDash([3, 3]);
-        ctx.strokeStyle = "#ffffff20"; ctx.lineWidth = 1;
+        ctx.strokeStyle = "#ffffff40"; ctx.lineWidth = 1;
         ctx.beginPath(); ctx.moveTo(PL, zeroY); ctx.lineTo(W - PR, zeroY); ctx.stroke();
         ctx.setLineDash([]);
 
@@ -1028,7 +1034,7 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
           if (macd.histogram[i] == null) continue;
           const x = toX(i), y = macdToY(macd.histogram[i]);
           const h = Math.abs(y - zeroY);
-          ctx.fillStyle = macd.histogram[i] >= 0 ? "#00e67640" : "#ff525240";
+          ctx.fillStyle = macd.histogram[i] >= 0 ? "#00e67675" : "#ff525275";
           ctx.fillRect(x - bw2/2, Math.min(y, zeroY), bw2, h);
         }
 
@@ -1039,7 +1045,7 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
           const x = toX(i), y = macdToY(macd.macd[i]);
           if (!_s) { ctx.moveTo(x, y); _s = true; } else ctx.lineTo(x, y);
         }
-        ctx.strokeStyle = "#448aff99"; ctx.lineWidth = 1.5; ctx.stroke();
+        ctx.strokeStyle = "#448aff"; ctx.lineWidth = 2; ctx.stroke();
 
         // Signal line (amber)
         ctx.beginPath(); _s = false;
@@ -1048,9 +1054,16 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
           const x = toX(i), y = macdToY(macd.signal[i]);
           if (!_s) { ctx.moveTo(x, y); _s = true; } else ctx.lineTo(x, y);
         }
-        ctx.strokeStyle = "#ffab4099"; ctx.lineWidth = 1.5; ctx.stroke();
+        ctx.strokeStyle = "#ffab40"; ctx.lineWidth = 2; ctx.stroke();
 
         ctx.restore();
+
+        // MACD legend
+        ctx.font = "8px DM Mono,monospace"; ctx.textAlign = "left";
+        ctx.fillStyle = "#448aff"; ctx.fillRect(PL + 40, macdTop + 5, 10, 2);
+        ctx.fillStyle = "#a89ec0"; ctx.fillText("MACD", PL + 53, macdTop + 10);
+        ctx.fillStyle = "#ffab40"; ctx.fillRect(PL + 95, macdTop + 5, 10, 2);
+        ctx.fillStyle = "#a89ec0"; ctx.fillText("Signal", PL + 108, macdTop + 10);
       }
     }
   }
