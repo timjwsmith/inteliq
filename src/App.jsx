@@ -131,6 +131,7 @@ const GLOSSARY = [
 const TABS = [
   { id:"dashboard", label:"Dashboard", icon:"◈" },
   { id:"explorer",  label:"Explorer",  icon:"◎" },
+  { id:"screener",  label:"Screener",  icon:"◰" },
   { id:"portfolio", label:"Portfolio", icon:"◑" },
   { id:"coach",     label:"Coach",     icon:"◭" },
   { id:"news",      label:"News",      icon:"◉" },
@@ -1302,6 +1303,12 @@ export default function App() {
   const [ipoFilter,  setIpoFilter]  = useState("ALL");
   const [ipoError,   setIpoError]   = useState(null);
 
+  // Natural Language Screener
+  const [screenerQ,       setScreenerQ]       = useState("");
+  const [screenerResults, setScreenerResults] = useState(null);
+  const [screenerLoading, setScreenerLoading] = useState(false);
+  const [screenerError,   setScreenerError]   = useState(null);
+
   // Earnings Calendar
   const [earningsData,    setEarningsData]    = useState({});
   const [earningsLoading, setEarningsLoading] = useState(false);
@@ -1654,6 +1661,19 @@ export default function App() {
     }, ...prev]);
   }
 
+  async function runScreener(q) {
+    const query = (q || screenerQ).trim();
+    if (!query) return;
+    setScreenerLoading(true); setScreenerError(null); setScreenerResults(null);
+    try {
+      const r = await fetch("/api/screener", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ query }) });
+      const d = await r.json();
+      if (d.error) setScreenerError(d.error);
+      else { setScreenerResults(d); d.forEach(pick => recordCall({...pick, priceAtCall: pick.priceStatic}, "screener")); }
+    } catch { setScreenerError("Screener failed — please try again."); }
+    setScreenerLoading(false);
+  }
+
   function buildPortfolioSnapshot(holdings, prices, audUsdRate) {
     let totalUSD = 0;
     const details = [];
@@ -1942,6 +1962,115 @@ export default function App() {
                       ))}
                     </div>
                   </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ══ SCREENER ══ */}
+          {tab==="screener"&&(
+            <div>
+              <div className="fu" style={{marginBottom:28}}>
+                <div>
+                  <h1 style={{fontFamily:"var(--ff-head)",fontSize:26,fontWeight:800,color:"var(--text2)",marginBottom:6}}>Natural Language Screener</h1>
+                  <p style={{fontSize:13,color:"var(--muted2)"}}>Describe what you're looking for — AI finds matching stocks with full analysis.</p>
+                </div>
+              </div>
+
+              <div className="fu2" style={{display:"flex",gap:8,marginBottom:20}}>
+                <input
+                  value={screenerQ} onChange={e=>setScreenerQ(e.target.value)}
+                  onKeyDown={e=>e.key==="Enter"&&runScreener()}
+                  placeholder="e.g. Undervalued ASX small-caps with strong cash flow and insider buying…"
+                  style={{flex:1,background:"var(--card)",border:"1px solid var(--border)",borderRadius:10,padding:"13px 18px",color:"var(--text2)",fontSize:14}}
+                />
+                <button onClick={()=>runScreener()} disabled={screenerLoading||!screenerQ.trim()} style={{background:screenerLoading||!screenerQ.trim()?"var(--card)":"var(--green)",color:screenerLoading||!screenerQ.trim()?"var(--muted)":"#0a0a14",border:"none",borderRadius:10,padding:"13px 28px",fontSize:13,fontFamily:"var(--ff-head)",fontWeight:700,opacity:screenerLoading?.7:1}}>
+                  {screenerLoading?"Screening…":"Screen →"}
+                </button>
+              </div>
+
+              {/* Suggested screens */}
+              {!screenerResults && !screenerLoading && (
+                <div className="fu3">
+                  <div className="section-label">SUGGESTED SCREENS</div>
+                  <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                    {[
+                      "Undervalued ASX small-caps with strong cash flow",
+                      "High-conviction AI infrastructure plays",
+                      "Beaten-down crypto with strong fundamentals",
+                      "ASX mining stocks leveraged to China recovery",
+                      "US dividend stocks with growing yields",
+                      "High-growth software companies with positive FCF",
+                    ].map(s=>(
+                      <button key={s} onClick={()=>{setScreenerQ(s);runScreener(s);}} style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:8,padding:"8px 14px",fontSize:11,color:"var(--muted2)",fontFamily:"var(--ff-mono)",textAlign:"left"}}>
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {screenerLoading && (
+                <div style={{display:"grid",gap:12}}>
+                  <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:10,padding:"14px 18px",marginBottom:4}}>
+                    <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                      <div style={{width:8,height:8,borderRadius:"50%",background:"var(--green)",animation:"pulse 1s infinite"}}/>
+                      <span style={{fontSize:11,fontFamily:"var(--ff-mono)",color:"var(--muted)"}}>AI is screening the market…</span>
+                    </div>
+                  </div>
+                  {[1,2,3].map(i=>(
+                    <div key={i} className="card" style={{padding:20}}>
+                      <div style={{display:"flex",gap:12,marginBottom:14,alignItems:"center"}}>
+                        <div className="shimmer-el" style={{width:44,height:44,borderRadius:10,flexShrink:0}}/>
+                        <div style={{flex:1}}><div className="shimmer-el" style={{width:"40%",height:14,marginBottom:8}}/><div className="shimmer-el" style={{width:"60%",height:11}}/></div>
+                        <div className="shimmer-el" style={{width:60,height:24,borderRadius:6}}/>
+                      </div>
+                      <div className="shimmer-el" style={{width:"90%",height:11,marginBottom:6}}/>
+                      <div className="shimmer-el" style={{width:"75%",height:11}}/>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {screenerError && <div style={{background:"#ff525212",border:"1px solid #ff525230",borderRadius:10,padding:16,color:"var(--red)",fontSize:13,marginBottom:20}}>{screenerError}</div>}
+
+              {screenerResults && !screenerLoading && (
+                <div className="fi">
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+                    <div className="section-label" style={{marginBottom:0}}>{screenerResults.length} MATCHES FOUND</div>
+                    <button onClick={()=>{setScreenerResults(null);setScreenerQ("");}} style={{background:"none",border:"none",fontSize:10,color:"var(--muted)",fontFamily:"var(--ff-mono)",padding:0,letterSpacing:"0.06em",cursor:"pointer"}}>← NEW SCREEN</button>
+                  </div>
+                  {screenerResults.map(s => (
+                    <div key={s.sym} className="card" style={{padding:22,marginBottom:10,borderLeft:`3px solid ${{BUY:"var(--green)",WATCH:"var(--amber)",AVOID:"var(--red)",HOLD:"var(--border2)"}[s.verdict]||"var(--border2)"}`}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap"}}>
+                        <div>
+                          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6,flexWrap:"wrap"}}>
+                            <span style={{fontFamily:"var(--ff-head)",fontSize:18,fontWeight:800,color:"var(--text2)"}}>{s.sym}</span>
+                            <span style={{fontSize:13,color:"var(--muted2)"}}>{s.name}</span>
+                            <VerdictBadge v={s.verdict}/>
+                            <ConvictionDots level={s.conviction}/>
+                          </div>
+                          {s.matchReason && (
+                            <div style={{background:"var(--green)10",border:"1px solid var(--green)25",borderRadius:8,padding:"6px 12px",marginBottom:8,display:"inline-block"}}>
+                              <span style={{fontSize:10,fontFamily:"var(--ff-mono)",color:"var(--green)",letterSpacing:"0.06em"}}>MATCH — </span>
+                              <span style={{fontSize:11,color:"var(--muted2)"}}>{s.matchReason}</span>
+                            </div>
+                          )}
+                          <p style={{fontSize:13,color:"var(--muted2)",lineHeight:1.7,maxWidth:600}}>{s.summary}</p>
+                        </div>
+                        <div style={{textAlign:"right",flexShrink:0}}>
+                          <div style={{fontFamily:"var(--ff-mono)",fontSize:18,fontWeight:600,color:"var(--text2)",marginBottom:3}}>{s.priceStatic ? `$${s.priceStatic.toLocaleString()}` : "—"}</div>
+                          <div style={{fontSize:11,color:"var(--muted)",fontFamily:"var(--ff-mono)"}}>tgt {s.target}</div>
+                        </div>
+                      </div>
+                      <div style={{marginTop:12,display:"flex",gap:8,flexWrap:"wrap"}}>
+                        <button onClick={()=>{setTab("explorer");setSearchQ(s.sym);handleSearch(s.sym);}} style={{background:"none",border:"1px solid var(--border)",borderRadius:7,padding:"5px 14px",fontSize:10,color:"var(--muted2)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em"}}>FULL ANALYSIS →</button>
+                        <button onClick={()=>addToWatchlist(s)} disabled={!!watchlist.find(w=>w.sym===s.sym)} style={{background:watchlist.find(w=>w.sym===s.sym)?"#00e67612":"none",border:`1px solid ${watchlist.find(w=>w.sym===s.sym)?"#00e67640":"var(--border)"}`,borderRadius:7,padding:"5px 14px",fontSize:10,color:watchlist.find(w=>w.sym===s.sym)?"var(--green)":"var(--muted2)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em"}}>
+                          {watchlist.find(w=>w.sym===s.sym)?"✓ WATCHLIST":"+ WATCHLIST"}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
