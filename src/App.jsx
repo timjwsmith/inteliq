@@ -135,6 +135,7 @@ const TABS = [
   { id:"news",      label:"News",      icon:"◉" },
   { id:"watchlist", label:"Watchlist", icon:"◇" },
   { id:"ipo",       label:"IPO",       icon:"◆" },
+  { id:"calls",     label:"Calls",     icon:"◐" },
 ];
 
 const PORT_TABS = [
@@ -684,6 +685,102 @@ function IpoCard({ ipo, onAnalyse }) {
   );
 }
 
+// ── Call Card ──────────────────────────────────────────────────────────────
+function CallCard({ record, currentPriceData, onAnalyse, priceFetching }) {
+  const verdictAccent = { BUY:"var(--green)", WATCH:"var(--amber)", AVOID:"var(--red)", HOLD:"var(--muted2)", SELL:"var(--red)" };
+  const accent = verdictAccent[record.verdict] || "var(--muted2)";
+  const sourceColor = record.source === "explorer" ? "var(--blue)" : "var(--purple)";
+  const sourceLabel = record.source === "explorer" ? "EXPLORER" : "DASHBOARD";
+
+  const currentPrice = currentPriceData?.price ?? null;
+  const priceAtCall  = record.priceAtCall;
+  const returnPct    = (currentPrice != null && priceAtCall != null && priceAtCall > 0)
+    ? ((currentPrice - priceAtCall) / priceAtCall) * 100
+    : null;
+
+  const isWin = returnPct != null && (
+    (["BUY","HOLD"].includes(record.verdict) && returnPct > 0) ||
+    (["AVOID","SELL"].includes(record.verdict) && returnPct < 0)
+  );
+
+  function ageSince(isoStr) {
+    const ms = Date.now() - new Date(isoStr).getTime();
+    const mins  = Math.floor(ms / 60000);
+    const hours = Math.floor(ms / 3600000);
+    const days  = Math.floor(ms / 86400000);
+    if (mins  <  60) return `${mins}m ago`;
+    if (hours <  24) return `${hours}h ago`;
+    if (days  < 365) return `${days}d ago`;
+    return `${Math.floor(days / 365)}y ago`;
+  }
+
+  function fmtP(p) {
+    if (p == null) return "—";
+    if (p >= 100000) return `$${(p/1000).toFixed(0)}k`;
+    if (p >= 10000)  return `$${(p/1000).toFixed(1)}k`;
+    if (p >= 1000)   return `$${p.toLocaleString("en",{maximumFractionDigits:0})}`;
+    if (p >= 1)      return `$${p.toFixed(2)}`;
+    return `$${p.toFixed(4)}`;
+  }
+
+  return (
+    <div className="card" style={{ padding:18, marginBottom:10, borderLeft:`3px solid ${accent}` }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, flexWrap:"wrap" }}>
+        {/* Left */}
+        <div style={{ display:"flex", gap:12, alignItems:"center", minWidth:0, flex:1 }}>
+          <div style={{ width:40, height:40, borderRadius:10, background:`${accent}18`, border:`1px solid ${accent}30`, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+            <span style={{ fontFamily:"var(--ff-head)", fontSize:11, fontWeight:800, color:accent }}>{record.sym.replace(".AX","").slice(0,3)}</span>
+          </div>
+          <div style={{ minWidth:0 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4, flexWrap:"wrap" }}>
+              <span style={{ fontFamily:"var(--ff-head)", fontSize:15, fontWeight:700, color:"var(--text2)" }}>{record.sym}</span>
+              <VerdictBadge v={record.verdict}/>
+              <ConvictionDots level={record.conviction}/>
+              <span className="badge" style={{ background:"var(--surface)", color:"var(--muted2)", border:"1px solid var(--border)" }}>{record.horizon} term</span>
+              <span className="badge" style={{ background:`${sourceColor}18`, color:sourceColor, border:`1px solid ${sourceColor}35` }}>{sourceLabel}</span>
+            </div>
+            <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" }}>
+              <span style={{ fontSize:12, color:"var(--muted2)" }}>{record.name}</span>
+              <span style={{ fontSize:10, color:"var(--muted)", fontFamily:"var(--ff-mono)" }}>{ageSince(record.calledAt)}</span>
+              {record.target && <span style={{ fontSize:10, color:"var(--muted)", fontFamily:"var(--ff-mono)" }}>tgt {record.target}</span>}
+            </div>
+          </div>
+        </div>
+        {/* Right */}
+        <div style={{ display:"flex", gap:20, alignItems:"center", flexShrink:0, flexWrap:"wrap" }}>
+          <div style={{ textAlign:"right" }}>
+            <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:3 }}>CALLED AT</div>
+            <div style={{ fontFamily:"var(--ff-mono)", fontSize:14, fontWeight:500, color:"var(--text2)" }}>{fmtP(priceAtCall)}</div>
+          </div>
+          <div style={{ textAlign:"right" }}>
+            <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:3 }}>NOW</div>
+            {priceFetching && currentPrice == null
+              ? <div className="shimmer-el" style={{ width:60, height:14 }}/>
+              : <div style={{ fontFamily:"var(--ff-mono)", fontSize:14, fontWeight:500, color:"var(--text2)" }}>{fmtP(currentPrice)}</div>
+            }
+          </div>
+          <div style={{ textAlign:"right", minWidth:70 }}>
+            <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:3 }}>RETURN</div>
+            {returnPct != null ? (
+              <div>
+                <div style={{ fontFamily:"var(--ff-mono)", fontSize:14, fontWeight:600, color:returnPct >= 0 ? "var(--green)" : "var(--red)" }}>
+                  {returnPct >= 0 ? "+" : ""}{returnPct.toFixed(1)}%
+                </div>
+                {isWin && <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--green)", letterSpacing:"0.06em", marginTop:2 }}>WIN</div>}
+              </div>
+            ) : (
+              <div style={{ fontFamily:"var(--ff-mono)", fontSize:14, color:"var(--muted)" }}>—</div>
+            )}
+          </div>
+          <button onClick={() => onAnalyse(record.sym)} style={{ background:"none", border:"1px solid var(--border)", borderRadius:8, padding:"7px 14px", fontSize:10, color:"var(--muted2)", fontFamily:"var(--ff-mono)", letterSpacing:"0.06em", whiteSpace:"nowrap" }}>
+            ANALYSE →
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Chart canvas ───────────────────────────────────────────────────────────
 function ChartCanvas({ candles, analysis, range, currency, indicators }) {
   const canvasRef   = useRef(null);
@@ -1203,6 +1300,14 @@ export default function App() {
   const [ipoFilter,  setIpoFilter]  = useState("ALL");
   const [ipoError,   setIpoError]   = useState(null);
 
+  // AI Call Record
+  const [callRecords,        setCallRecords]        = useState(() => {
+    try { return JSON.parse(localStorage.getItem("inteliq_calls") || "[]"); } catch { return []; }
+  });
+  const [callsFilter,        setCallsFilter]        = useState("ALL");
+  const [callsPrices,        setCallsPrices]        = useState({});
+  const [callsPriceFetching, setCallsPriceFetching] = useState(false);
+
   // Chart / Detail
   const [detailSym,setDetailSym]           = useState(null); // {sym,name,priceType,priceCurrency,sector}
   const [detailStock,setDetailStock]       = useState(null); // full card analysis object, if drilled from a card
@@ -1257,6 +1362,8 @@ export default function App() {
   useEffect(() => { try { localStorage.setItem("inteliq_history", JSON.stringify(searchHistory)); } catch {} }, [searchHistory]);
   // Persist watchlist
   useEffect(() => { try { localStorage.setItem("inteliq_watchlist", JSON.stringify(watchlist)); } catch {} }, [watchlist]);
+  // Persist call records
+  useEffect(() => { try { localStorage.setItem("inteliq_calls", JSON.stringify(callRecords)); } catch {} }, [callRecords]);
 
   // Fetch FX rate on mount
   useEffect(() => {
@@ -1319,6 +1426,7 @@ export default function App() {
       const d = await r.json();
       if (Array.isArray(d) && d.length > 0) {
         setDashPicks(d);
+        d.forEach(pick => recordCall({ ...pick, priceAtCall: pick.priceStatic }, "dashboard"));
         const allText = d.map(p => [p.summary,p.macro,p.fundamental,p.technical,p.sentiment,p.portfolio].filter(Boolean).join(" ")).join(" ");
         extractGlossaryTerms(allText);
       } else setDashError(d.error || "No picks returned");
@@ -1349,6 +1457,17 @@ export default function App() {
   }
 
   useEffect(() => { if (tab === "ipo") fetchIPO(); }, [tab]);
+
+  useEffect(() => {
+    if (tab !== "calls" || callRecords.length === 0) return;
+    setCallsPriceFetching(true);
+    const unique = callRecords
+      .filter((c, i, a) => a.findIndex(x => x.sym === c.sym) === i)
+      .map(c => ({ sym: c.sym, type: c.priceType }));
+    fetch("/api/prices", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({symbols:unique}) })
+      .then(r => r.json()).then(d => setCallsPrices(d)).catch(() => {})
+      .finally(() => setCallsPriceFetching(false));
+  }, [tab]);
 
   async function openDetail(symInfo, stock = null, preloadedAnalysis = null) {
     setDetailFrom(tab);
@@ -1417,6 +1536,7 @@ export default function App() {
       const priceType = isKnownCrypto ? "crypto" : "stock";
       // Parallel: live price + fundamentals (if ticker-like and not crypto)
       let livePriceCtx = "";
+      let livePrice = null;
       let fundamentals = null;
       if (isTickerLike) {
         try {
@@ -1425,7 +1545,7 @@ export default function App() {
             ...(!isKnownCrypto ? [fetch(`/api/fundamentals/${upperQ}`).then(r=>r.json()).catch(()=>null)] : []),
           ];
           const [pd, fmpData] = await Promise.all(parallelFetches);
-          if (pd?.price) livePriceCtx = ` The current live market price is $${pd.price.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})} USD as of today — base all price levels, support/resistance, and targets on this actual price.`;
+          if (pd?.price) { livePrice = pd.price; livePriceCtx = ` The current live market price is $${pd.price.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})} USD as of today — base all price levels, support/resistance, and targets on this actual price.`; }
           if (fmpData) fundamentals = fmpData;
         } catch {}
       }
@@ -1454,6 +1574,7 @@ export default function App() {
       const text = data.content?.find(b=>b.type==="text")?.text||"";
       const parsed = JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}")+1));
       setResult(parsed);
+      recordCall({ ...parsed, priceAtCall: livePrice || parsed.priceStatic }, "explorer");
       const explorerText = [parsed.summary,parsed.macro,parsed.fundamental,parsed.technical,parsed.sentiment,parsed.portfolio].filter(Boolean).join(" ");
       extractGlossaryTerms(explorerText);
       // Auto-fetch inline chart using display currency for crypto (BTC-USD or BTC-AUD)
@@ -1502,6 +1623,27 @@ export default function App() {
     }, ...prev]);
   }
 
+  function recordCall(parsed, source) {
+    const SIX_HOURS = 6 * 60 * 60 * 1000;
+    setCallRecords(prev => {
+      const recent = prev.find(c => c.sym === parsed.sym && (Date.now() - new Date(c.calledAt).getTime()) < SIX_HOURS);
+      if (recent) return prev;
+      const record = {
+        id: `${parsed.sym}-${Date.now()}`,
+        sym: parsed.sym,           name: parsed.name || parsed.sym,
+        verdict: parsed.verdict,   conviction: parsed.conviction || "MEDIUM",
+        horizon: parsed.horizon || "Medium",
+        priceAtCall:   parsed.priceAtCall  || parsed.priceStatic || null,
+        priceType:     parsed.priceType    || "stock",
+        priceCurrency: parsed.priceCurrency|| "USD",
+        calledAt: new Date().toISOString(),
+        target: parsed.target || null,
+        source,
+      };
+      return [record, ...prev].slice(0, 50);
+    });
+  }
+
   const filteredNews = newsFilter === "ALL"
     ? newsItems
     : newsItems.filter(n => n.tag === newsFilter);
@@ -1532,6 +1674,9 @@ export default function App() {
                 )}
                 {t.id==="watchlist"&&watchlist.length>0&&(
                   <span style={{ marginLeft:"auto", background:"var(--blue)20", color:"var(--blue)", borderRadius:6, padding:"1px 7px", fontSize:10, fontFamily:"var(--ff-mono)", border:"1px solid var(--blue)40" }}>{watchlist.length}</span>
+                )}
+                {t.id==="calls"&&callRecords.length>0&&(
+                  <span style={{ marginLeft:"auto", background:"var(--purple)20", color:"var(--purple)", borderRadius:6, padding:"1px 7px", fontSize:10, fontFamily:"var(--ff-mono)", border:"1px solid var(--purple)40" }}>{callRecords.length}</span>
                 )}
               </button>
             ))}
@@ -1978,6 +2123,124 @@ export default function App() {
                       <IpoCard key={`${ipo.symbol}-${ipo.date}-${i}`} ipo={ipo} onAnalyse={sym=>{setTab("explorer");handleSearch(sym);}}/>
                     ))}
                   </div>
+                );
+              })()}
+            </div>
+          )}
+
+          {/* ══ AI CALLS ══ */}
+          {tab==="calls"&&(
+            <div>
+              <div className="fu" style={{marginBottom:24}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap"}}>
+                  <div>
+                    <h1 style={{fontFamily:"var(--ff-head)",fontSize:26,fontWeight:800,color:"var(--text2)",marginBottom:6}}>AI Track Record</h1>
+                    <p style={{fontSize:13,color:"var(--muted2)"}}>Every verdict the AI has made — with live return tracking.</p>
+                  </div>
+                  {callRecords.length > 0 && (
+                    <button onClick={()=>{ if(window.confirm("Clear all call records? This cannot be undone.")) setCallRecords([]); }} style={{background:"#ff525218",border:"1px solid #ff525240",borderRadius:8,padding:"7px 16px",fontSize:10,color:"var(--red)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em"}}>
+                      CLEAR ALL
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {callRecords.length === 0 ? (
+                <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:14,padding:"52px 32px",textAlign:"center"}}>
+                  <div style={{fontSize:40,marginBottom:16,opacity:.25}}>◐</div>
+                  <p style={{color:"var(--muted2)",fontSize:15,fontFamily:"var(--ff-head)",fontWeight:700,marginBottom:8}}>No calls recorded yet.</p>
+                  <p style={{color:"var(--muted)",fontSize:13,marginBottom:24,lineHeight:1.6,maxWidth:420,margin:"0 auto 24px"}}>
+                    Every time the AI gives a verdict in Explorer or Dashboard, it's automatically saved here with the entry price. Over time you'll build a track record you can actually verify.
+                  </p>
+                  <div style={{display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap"}}>
+                    <button onClick={()=>setTab("explorer")} style={{background:"var(--green)18",border:"1px solid var(--green)40",borderRadius:8,padding:"8px 20px",fontSize:11,color:"var(--green)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em"}}>
+                      GO TO EXPLORER →
+                    </button>
+                    <button onClick={()=>setTab("dashboard")} style={{background:"var(--purple)18",border:"1px solid var(--purple)40",borderRadius:8,padding:"8px 20px",fontSize:11,color:"var(--purple)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em"}}>
+                      GO TO DASHBOARD →
+                    </button>
+                  </div>
+                </div>
+              ) : (() => {
+                // ── Stats computation ──
+                const withPrices = callRecords.filter(c => {
+                  const cp = callsPrices[c.sym]?.price;
+                  return cp != null && c.priceAtCall != null && c.priceAtCall > 0;
+                }).map(c => {
+                  const cp = callsPrices[c.sym]?.price;
+                  const ret = ((cp - c.priceAtCall) / c.priceAtCall) * 100;
+                  const win = (["BUY","HOLD"].includes(c.verdict) && ret > 0) || (["AVOID","SELL"].includes(c.verdict) && ret < 0);
+                  return { ...c, returnPct: ret, win };
+                });
+
+                const buyCallsWithPrices = withPrices.filter(c => c.verdict === "BUY");
+                const buyWins = buyCallsWithPrices.filter(c => c.win).length;
+                const buyWinRate = buyCallsWithPrices.length >= 3 ? (buyWins / buyCallsWithPrices.length * 100) : null;
+                const avgBuyReturn = buyCallsWithPrices.length > 0
+                  ? buyCallsWithPrices.reduce((s, c) => s + c.returnPct, 0) / buyCallsWithPrices.length
+                  : null;
+                const best  = withPrices.length > 0 ? withPrices.reduce((a, b) => a.returnPct > b.returnPct ? a : b) : null;
+                const worst = withPrices.length > 0 ? withPrices.reduce((a, b) => a.returnPct < b.returnPct ? a : b) : null;
+
+                const verdictCounts = { BUY:0, WATCH:0, AVOID:0, HOLD:0 };
+                callRecords.forEach(c => { if (verdictCounts[c.verdict] != null) verdictCounts[c.verdict]++; });
+
+                const filtered = callsFilter === "ALL" ? callRecords : callRecords.filter(c => c.verdict === callsFilter);
+
+                return (
+                  <>
+                    {/* Stats strip */}
+                    <div className="fu2" style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:12,marginBottom:24}}>
+                      {[
+                        { l:"TOTAL CALLS", v:`${callRecords.length}`, c:"var(--text2)", sub:null },
+                        { l:"BUY WIN RATE", v: buyWinRate != null ? `${buyWinRate.toFixed(0)}%` : buyCallsWithPrices.length < 3 ? `need ${3 - buyCallsWithPrices.length} more` : "—", c: buyWinRate != null ? (buyWinRate >= 50 ? "var(--green)" : "var(--red)") : "var(--muted)", sub: buyCallsWithPrices.length > 0 ? `${buyWins}/${buyCallsWithPrices.length} BUYs` : null },
+                        { l:"AVG BUY RETURN", v: avgBuyReturn != null ? `${avgBuyReturn >= 0 ? "+" : ""}${avgBuyReturn.toFixed(1)}%` : "—", c: avgBuyReturn != null ? (avgBuyReturn >= 0 ? "var(--green)" : "var(--red)") : "var(--muted)", sub:null },
+                        { l:"BEST CALL", v: best ? `${best.returnPct >= 0 ? "+" : ""}${best.returnPct.toFixed(1)}%` : "—", c:"var(--green)", sub: best ? best.sym : null },
+                        { l:"WORST CALL", v: worst ? `${worst.returnPct >= 0 ? "+" : ""}${worst.returnPct.toFixed(1)}%` : "—", c:"var(--red)", sub: worst ? worst.sym : null },
+                      ].map(m => (
+                        <div key={m.l} className="stat-card">
+                          <div style={{fontSize:9,fontFamily:"var(--ff-mono)",color:"var(--muted)",letterSpacing:"0.12em",marginBottom:10}}>{m.l}</div>
+                          <div style={{fontSize:20,fontFamily:"var(--ff-head)",fontWeight:800,color:m.c,lineHeight:1}}>{m.v}</div>
+                          {m.sub && <div style={{fontSize:10,color:"var(--muted2)",marginTop:5,fontFamily:"var(--ff-mono)"}}>{m.sub}</div>}
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Filter pills */}
+                    <div className="fu3" style={{display:"flex",gap:6,marginBottom:20,flexWrap:"wrap"}}>
+                      {["ALL","BUY","WATCH","AVOID","HOLD"].map(f => {
+                        const count = f === "ALL" ? callRecords.length : verdictCounts[f] || 0;
+                        return (
+                          <button key={f} className={`filter-btn${callsFilter===f?" active":""}`} onClick={()=>setCallsFilter(f)}>
+                            {f} {count > 0 && `(${count})`}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* Card list */}
+                    {callsPriceFetching && callsPrices && Object.keys(callsPrices).length === 0 ? (
+                      <div style={{display:"grid",gap:10}}>
+                        {[1,2,3].map(i=><div key={i} className="shimmer-el" style={{height:88}}/>)}
+                      </div>
+                    ) : filtered.length === 0 ? (
+                      <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:12,padding:"32px",textAlign:"center"}}>
+                        <p style={{color:"var(--muted2)",fontSize:13}}>No {callsFilter} calls recorded.</p>
+                      </div>
+                    ) : (
+                      <div className="fu2">
+                        {filtered.map(c => (
+                          <CallCard
+                            key={c.id}
+                            record={c}
+                            currentPriceData={callsPrices[c.sym]}
+                            priceFetching={callsPriceFetching}
+                            onAnalyse={sym => { setTab("explorer"); handleSearch(sym); }}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </>
                 );
               })()}
             </div>
