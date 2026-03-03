@@ -1068,7 +1068,7 @@ function GlossaryModal({ open, onClose, focusTerm, allGlossary }) {
                   <span style={{ fontFamily:"var(--ff-head)", fontSize:14, fontWeight:700, color: focusTerm===g.term ? "var(--amber)" : "var(--text2)" }}>{g.term}</span>
                   {isCustom && <span className="badge" style={{ background:"#448aff18", color:"var(--blue)", border:"1px solid #448aff35", fontSize:8 }}>AI</span>}
                 </div>
-                <p style={{ fontSize:13, color:"var(--muted2)", lineHeight:1.7, margin:0 }}>{g.def}</p>
+                <p style={{ fontSize:13, color:"var(--muted2)", lineHeight:1.7, margin:0 }}>{g.def || g.definition}</p>
               </div>
             );
           })}
@@ -1168,7 +1168,9 @@ export default function App() {
       if (!Array.isArray(d) || d.length === 0) return;
       setCustomTerms(prev => {
         const existing = new Set([...GLOSSARY, ...prev].map(g => g.term.toLowerCase()));
-        const newTerms = d.filter(t => t.term && t.definition && !existing.has(t.term.toLowerCase()));
+        const newTerms = d
+          .filter(t => t.term && t.definition && !existing.has(t.term.toLowerCase()))
+          .map(t => ({ term: t.term, def: t.definition }));
         return newTerms.length > 0 ? [...prev, ...newTerms] : prev;
       });
     } catch {}
