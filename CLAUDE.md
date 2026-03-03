@@ -20,6 +20,7 @@ A full-stack React + Express investment dashboard. Live stock/crypto data, AI-po
 - Portfolio (◑) — multi-source holdings with CHART button on every holding
 - News (◉) — live Yahoo Finance RSS, filterable by category
 - Watchlist (◇) — saved stocks with price targets
+- IPO (◆) — upcoming & recent IPOs on NASDAQ, NYSE, and ASX (Finnhub)
 
 ## Key features
 
@@ -91,6 +92,7 @@ A full-stack React + Express investment dashboard. Live stock/crypto data, AI-po
 - GET  `/api/coinbase/balances` — Coinbase Advanced Trade API (CDP JWT/ES256 auth)
 - GET  `/api/coinspot/balances` — CoinSpot read-only API (HMAC-SHA512)
 - GET  `/api/news` — Yahoo Finance RSS aggregated + tagged, cached 15 min
+- GET  `/api/ipo` — Finnhub IPO calendar (NASDAQ/NYSE/ASX/CBOE, 14d back → 90d ahead), cached 4h; returns `[]` if no `FINNHUB_API_KEY`
 - GET  `/api/dashboard/picks` — AI-generated top 3 picks, cached 4h (`?force=1` to bust)
 - GET  `/health` — server health check (no /api prefix)
 
@@ -109,7 +111,7 @@ trailing text/commentary that Claude occasionally appends after the JSON.
 - Key requires **Coinbase App & Advanced Trade → View (read-only)** permission
 
 ## Environment variables (.env)
-ANTHROPIC_API_KEY, COINBASE_API_KEY, COINBASE_API_SECRET, COINSPOT_API_KEY, COINSPOT_API_SECRET, FINNHUB_API_KEY (optional), FMP_API_KEY (financialmodelingprep.com — for live fundamentals)
+ANTHROPIC_API_KEY, COINBASE_API_KEY, COINBASE_API_SECRET, COINSPOT_API_KEY, COINSPOT_API_SECRET, FINNHUB_API_KEY (used for IPO calendar — tab shows empty state if absent), FMP_API_KEY (financialmodelingprep.com — for live fundamentals)
 
 ## Deployment
 docker-compose down && docker-compose up --build --force-recreate

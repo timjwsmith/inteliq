@@ -134,6 +134,7 @@ const TABS = [
   { id:"portfolio", label:"Portfolio", icon:"◑" },
   { id:"news",      label:"News",      icon:"◉" },
   { id:"watchlist", label:"Watchlist", icon:"◇" },
+  { id:"ipo",       label:"IPO",       icon:"◆" },
 ];
 
 const PORT_TABS = [
@@ -626,6 +627,62 @@ function NewsCard({ item }) {
   );
 }
 
+
+// ── IPO Card ───────────────────────────────────────────────────────────────
+function IpoCard({ ipo, onAnalyse }) {
+  const statusColor = { expected:"var(--green)", priced:"var(--blue)", filed:"var(--amber)", withdrawn:"var(--red)" };
+  const statusLabel = { expected:"EXPECTED", priced:"PRICED", filed:"FILED", withdrawn:"WITHDRAWN" };
+  const sc = statusColor[ipo.status] || "var(--muted2)";
+  const sl = statusLabel[ipo.status] || (ipo.status||"").toUpperCase();
+  const isASX = ipo.exchange && ipo.exchange.toUpperCase().includes("ASX");
+  const exchColor = isASX ? "var(--amber)" : "var(--blue)";
+  const exchLabel = isASX ? "ASX" : "US";
+
+  function relDate(dateStr) {
+    if (!dateStr) return "—";
+    const d = new Date(dateStr);
+    const now = new Date();
+    const diffMs = d - now;
+    const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
+    if (diffDays === 0) return "Today";
+    if (diffDays === 1) return "Tomorrow";
+    if (diffDays === -1) return "Yesterday";
+    if (diffDays > 0 && diffDays <= 30) return `in ${diffDays} days`;
+    if (diffDays < 0 && diffDays >= -30) return `${Math.abs(diffDays)} days ago`;
+    return d.toLocaleDateString("en-AU", { day:"numeric", month:"short", year:"numeric" });
+  }
+
+  const shares = ipo.numberOfShares ? (ipo.numberOfShares / 1e6).toFixed(1) + "M shares" : null;
+  const raise = ipo.totalSharesValue && ipo.totalSharesValue > 1e8
+    ? "$" + (ipo.totalSharesValue / 1e9).toFixed(2) + "B raise"
+    : null;
+
+  return (
+    <div className="card" style={{padding:20,marginBottom:10,borderLeft:`3px solid ${sc}`}}>
+      <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"flex-start",flexWrap:"wrap"}}>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:8,flexWrap:"wrap"}}>
+            <span style={{fontFamily:"var(--ff-head)",fontSize:15,fontWeight:700,color:"var(--text2)"}}>{ipo.name || ipo.symbol || "Unknown"}</span>
+            {ipo.symbol && <span className="badge" style={{background:"var(--surface)",color:"var(--muted2)",border:"1px solid var(--border)",fontFamily:"var(--ff-mono)"}}>{ipo.symbol}</span>}
+            <span className="badge" style={{background:`${sc}20`,color:sc,border:`1px solid ${sc}40`}}>{sl}</span>
+          </div>
+          <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+            <span className="badge" style={{background:`${exchColor}20`,color:exchColor,border:`1px solid ${exchColor}40`}}>{exchLabel}</span>
+            <span style={{fontSize:11,color:"var(--muted2)",fontFamily:"var(--ff-mono)"}}>{relDate(ipo.date)}</span>
+            {ipo.price && <span style={{fontSize:11,color:"var(--muted2)",fontFamily:"var(--ff-mono)"}}>@ {ipo.price}</span>}
+            {shares && <span style={{fontSize:11,color:"var(--muted)",fontFamily:"var(--ff-mono)"}}>{shares}</span>}
+            {raise  && <span style={{fontSize:11,color:"var(--green)",fontFamily:"var(--ff-mono)",fontWeight:600}}>{raise}</span>}
+          </div>
+        </div>
+        {ipo.symbol && (
+          <button onClick={()=>onAnalyse(ipo.symbol)} style={{background:"none",border:"1px solid var(--green)50",borderRadius:8,padding:"7px 14px",fontSize:10,color:"var(--green)",fontFamily:"var(--ff-mono)",letterSpacing:"0.08em",flexShrink:0,whiteSpace:"nowrap"}}>
+            ANALYSE →
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // ── Chart canvas ───────────────────────────────────────────────────────────
 function ChartCanvas({ candles, analysis, range, currency, indicators }) {
@@ -1127,6 +1184,11 @@ export default function App() {
   const [newsItems,setNewsItems]   = useState(NEWS_MOCK);
   const [newsLoading,setNewsLoading] = useState(false);
 
+  // IPO Calendar
+  const [ipoItems,   setIpoItems]   = useState([]);
+  const [ipoLoading, setIpoLoading] = useState(false);
+  const [ipoFilter,  setIpoFilter]  = useState("ALL");
+  const [ipoError,   setIpoError]   = useState(null);
 
   // Chart / Detail
   const [detailSym,setDetailSym]           = useState(null); // {sym,name,priceType,priceCurrency,sector}
@@ -1261,6 +1323,19 @@ export default function App() {
     setNewsLoading(false);
   }
 
+  async function fetchIPO() {
+    if (ipoLoading) return;
+    setIpoLoading(true); setIpoError(null);
+    try {
+      const r = await fetch("/api/ipo");
+      const d = await r.json();
+      if (Array.isArray(d)) setIpoItems(d);
+      else setIpoError(d.error || "Failed to load IPO data");
+    } catch { setIpoError("Could not load IPO data — check your connection"); }
+    setIpoLoading(false);
+  }
+
+  useEffect(() => { if (tab === "ipo") fetchIPO(); }, [tab]);
 
   async function openDetail(symInfo, stock = null, preloadedAnalysis = null) {
     setDetailFrom(tab);
@@ -1315,13 +1390,15 @@ export default function App() {
 
   const allHoldings = [...cbHoldings,...csHoldings,...cmcHoldings];
 
-  async function handleSearch() {
-    if (!searchQ.trim()) return;
+  async function handleSearch(overrideQ) {
+    const q = (overrideQ || searchQ).trim();
+    if (!q) return;
+    if (overrideQ) setSearchQ(overrideQ);
     setSearching(true); setResult(null); setSearchErr(null); setExplorerAnalysis(null); setExplorerChart(null);
     try {
       const today = new Date().toLocaleDateString("en-AU",{year:"numeric",month:"long",day:"numeric"});
       const KNOWN_CRYPTO = ["BTC","ETH","SOL","BNB","XRP","ADA","DOGE","AVAX","DOT","MATIC","LINK","UNI","LTC","BCH","ATOM","SHIB","TRX","TON","OP","ARB","NEAR","GRT","NU"];
-      const upperQ = searchQ.trim().toUpperCase();
+      const upperQ = q.toUpperCase();
       const isKnownCrypto = KNOWN_CRYPTO.includes(upperQ);
       const isTickerLike = /^[A-Z0-9.]{1,8}$/.test(upperQ);
       const priceType = isKnownCrypto ? "crypto" : "stock";
@@ -1358,7 +1435,7 @@ export default function App() {
         model:"claude-sonnet-4-20250514", max_tokens:1000,
         system:`You are a senior investment analyst. Today is ${today}. Your training knowledge has a cutoff of approximately mid-2025 — do NOT present specific metrics from your training data (e.g. ETF flow volumes, exact hash rates, specific institutional inflow figures, dated earnings numbers) as if they are current facts for ${today}. For fundamentals, focus on structural and qualitative factors. If you cite a specific metric that may have changed, frame it as approximate or add "as of mid-2025". All macro commentary must reflect conditions as of ${today} — do not reference past rate decisions or events as if they are upcoming. For crypto assets (BTC, ETH, SOL etc) analyse the native coin/token directly — do NOT substitute an ETF or trust product. Respond ONLY with valid JSON, no markdown:
 {"sym":"TICKER","name":"Full name","sector":"sector","verdict":"BUY|WATCH|AVOID|HOLD","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","priceStatic":123.45,"target":"$X","upside":"+X%","up":true,"priceType":"stock or crypto","avgCurrency":"USD or AUD","priceCurrency":"USD or AUD","summary":"2-3 sentences","macro":"2-3 sentences","fundamental":"2-3 sentences","technical":"2-3 sentences","sentiment":"2-3 sentences","insider":"2-3 sentences","portfolio":"2-3 sentences"}`,
-        messages:[{role:"user",content:`Analyse this investment: ${searchQ}.${livePriceCtx}${fundamentalsCtx}`}]
+        messages:[{role:"user",content:`Analyse this investment: ${q}.${livePriceCtx}${fundamentalsCtx}`}]
       })});
       const data = await res.json();
       const text = data.content?.find(b=>b.type==="text")?.text||"";
@@ -1833,6 +1910,65 @@ export default function App() {
             </div>
           )}
 
+
+          {/* ══ IPO CALENDAR ══ */}
+          {tab==="ipo"&&(
+            <div>
+              <div className="fu" style={{marginBottom:24}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap"}}>
+                  <div>
+                    <h1 style={{fontFamily:"var(--ff-head)",fontSize:26,fontWeight:800,color:"var(--text2)",marginBottom:6}}>IPO Calendar</h1>
+                    <p style={{fontSize:13,color:"var(--muted2)"}}>Upcoming &amp; recent listings — NASDAQ · NYSE · ASX</p>
+                  </div>
+                  <button onClick={()=>{setIpoItems([]);fetchIPO();}} disabled={ipoLoading} style={{background:"none",border:"1px solid var(--border)",borderRadius:8,padding:"7px 16px",fontSize:10,color:ipoLoading?"var(--muted)":"var(--muted2)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",opacity:ipoLoading?.5:1}}>
+                    {ipoLoading ? "↻ LOADING…" : "↻ REFRESH"}
+                  </button>
+                </div>
+              </div>
+
+              <div style={{display:"flex",gap:6,marginBottom:20,flexWrap:"wrap"}}>
+                {["ALL","UPCOMING","PRICED","FILED","WITHDRAWN"].map(f=>(
+                  <button key={f} className={`filter-btn${ipoFilter===f?" active":""}`} onClick={()=>setIpoFilter(f)}>{f}</button>
+                ))}
+              </div>
+
+              {ipoError && (
+                <div style={{background:"#ff525212",border:"1px solid #ff525230",borderRadius:12,padding:"20px 24px",marginBottom:16,display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+                  <p style={{fontSize:13,color:"var(--red)"}}>{ipoError}</p>
+                  <button onClick={fetchIPO} style={{background:"none",border:"1px solid var(--red)50",borderRadius:8,padding:"6px 14px",fontSize:10,color:"var(--red)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em"}}>TRY AGAIN</button>
+                </div>
+              )}
+
+              {ipoLoading && (
+                <div style={{display:"grid",gap:10,marginBottom:20}}>
+                  {[1,2,3,4].map(i=><div key={i} className="shimmer-el" style={{height:90}}/>)}
+                </div>
+              )}
+
+              {!ipoLoading && !ipoError && (() => {
+                const statusMap = { UPCOMING:"expected", PRICED:"priced", FILED:"filed", WITHDRAWN:"withdrawn" };
+                const filtered = ipoFilter === "ALL" ? ipoItems : ipoItems.filter(i => i.status === statusMap[ipoFilter]);
+                if (filtered.length === 0) {
+                  return (
+                    <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:12,padding:"40px 32px",textAlign:"center"}}>
+                      <div style={{fontSize:28,marginBottom:12,opacity:.3}}>◆</div>
+                      <p style={{color:"var(--muted2)",fontSize:14,fontFamily:"var(--ff-head)",fontWeight:600,marginBottom:8}}>
+                        {ipoItems.length === 0 ? "No IPO data available." : "No upcoming IPOs in this window."}
+                      </p>
+                      {ipoItems.length === 0 && <p style={{color:"var(--muted)",fontSize:12}}>Finnhub API key may not be configured.</p>}
+                    </div>
+                  );
+                }
+                return (
+                  <div className="fu2">
+                    {filtered.map((ipo,i) => (
+                      <IpoCard key={`${ipo.symbol}-${ipo.date}-${i}`} ipo={ipo} onAnalyse={sym=>{setTab("explorer");handleSearch(sym);}}/>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
 
           {/* ══ DETAIL / CHART ══ */}
           {tab==="detail"&&(

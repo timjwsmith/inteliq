@@ -573,6 +573,38 @@ Provide 1-3 support and 1-3 resistance levels using actual prices from the data.
   }
 });
 
+// ── IPO Calendar (Finnhub) ─────────────────────────────────────────────────
+let ipoCache = { items: [], ts: 0 };
+
+app.get("/api/ipo", async (req, res) => {
+  const now = Date.now();
+  if (ipoCache.items.length && now - ipoCache.ts < 4 * 60 * 60 * 1000) {
+    return res.json(ipoCache.items);
+  }
+  if (!FINNHUB_API_KEY) return res.json([]);
+
+  const pad = n => String(n).padStart(2, "0");
+  const fmt = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  const from = new Date(now - 14 * 24 * 60 * 60 * 1000);
+  const to   = new Date(now + 90 * 24 * 60 * 60 * 1000);
+
+  try {
+    const url = `https://finnhub.io/api/v1/calendar/ipo?from=${fmt(from)}&to=${fmt(to)}&token=${FINNHUB_API_KEY}`;
+    const r = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
+    const d = await r.json();
+    const allowed = ["NASDAQ", "NYSE", "ASX", "CBOE"];
+    const items = (d.ipoCalendar || [])
+      .filter(ipo => ipo.exchange && allowed.some(ex => ipo.exchange.toUpperCase().includes(ex)))
+      .sort((a, b) => new Date(a.date) - new Date(b.date));
+    ipoCache = { items, ts: now };
+    console.log(`IPO: fetched ${items.length} items`);
+    res.json(items);
+  } catch (err) {
+    console.error("IPO fetch error:", err.message);
+    res.status(500).json({ error: "IPO fetch failed" });
+  }
+});
+
 // ── Live News (Yahoo Finance RSS) ──────────────────────────────────────────
 let newsCache = { items: [], ts: 0 };
 
@@ -736,6 +768,7 @@ app.get("/health", (_, res) => res.json({
   coinspot:  !!(COINSPOT_API_KEY && COINSPOT_API_SECRET),
   finnhub:   !!FINNHUB_API_KEY,
   fmp:       !!FMP_API_KEY,
+  ipo:       !!FINNHUB_API_KEY,
 }));
 
 app.listen(PORT, () => {
