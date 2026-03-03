@@ -2001,7 +2001,14 @@ export default function App() {
                         <div style={{marginBottom:14}}>
                           <div className="section-label">PATTERN DETECTED</div>
                           <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:6}}>
-                            <span style={{fontFamily:"var(--ff-head)",fontSize:14,fontWeight:700,color:detailAnalysis.pattern.bullish?"var(--green)":"var(--red)"}}>{detailAnalysis.pattern.name}</span>
+                            {(() => {
+                              const pName = detailAnalysis.pattern.name;
+                              const col = detailAnalysis.pattern.bullish ? "var(--green)" : "var(--red)";
+                              const matched = allGlossary.find(g => pName.toLowerCase().includes(g.term.toLowerCase()));
+                              return matched
+                                ? <span onClick={() => openGlossary(matched.term)} style={{fontFamily:"var(--ff-head)",fontSize:14,fontWeight:700,color:col,cursor:"pointer",borderBottom:"1px dotted currentColor"}} title={`Click to define: ${matched.term}`}>{pName}</span>
+                                : <span style={{fontFamily:"var(--ff-head)",fontSize:14,fontWeight:700,color:col}}>{pName}</span>;
+                            })()}
                             <span className="badge" style={{background:detailAnalysis.pattern.bullish?"#00e67618":"#ff525218",color:detailAnalysis.pattern.bullish?"var(--green)":"var(--red)",border:`1px solid ${detailAnalysis.pattern.bullish?"#00e67640":"#ff525240"}`}}>{detailAnalysis.pattern.bullish?"BULLISH":"BEARISH"}</span>
                           </div>
                           {detailAnalysis.pattern.note && <p style={{fontSize:12,color:"var(--muted2)",lineHeight:1.6}}>{linkifyText(detailAnalysis.pattern.note, openGlossary, allGlossary)}</p>}
