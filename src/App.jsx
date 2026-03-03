@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, createContext, useContext } from "react";
 
 // ── Fonts ──────────────────────────────────────────────────────────────────
 const fontLink = document.createElement("link");
@@ -226,15 +226,18 @@ function parseTargetNum(targetStr) {
 
 const nowTime = () => new Date().toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit" });
 
-// ── Glossary linkifier ─────────────────────────────────────────────────────
-function linkifyText(text, onTermClick) {
+// ── Glossary context & linkifier ───────────────────────────────────────────
+const GlossaryCtx = createContext({ allGlossary: GLOSSARY, openGlossary: () => {} });
+
+function linkifyText(text, onTermClick, glossary) {
   if (!text || !onTermClick) return text;
-  const sorted = [...GLOSSARY].sort((a, b) => b.term.length - a.term.length);
+  const gl = glossary || GLOSSARY;
+  const sorted = [...gl].sort((a, b) => b.term.length - a.term.length);
   const escaped = sorted.map(g => g.term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
   const regex = new RegExp(`(${escaped.join("|")})`, "gi");
   const parts = text.split(regex);
   return parts.map((part, i) => {
-    const match = GLOSSARY.find(g => g.term.toLowerCase() === part.toLowerCase());
+    const match = gl.find(g => g.term.toLowerCase() === part.toLowerCase());
     if (match) {
       return (
         <span key={i} onClick={() => onTermClick(match.term)}
@@ -246,6 +249,13 @@ function linkifyText(text, onTermClick) {
     }
     return part;
   });
+}
+
+// Consume context — drop-in wrapper for any text that should have linked terms
+function LinkedText({ children }) {
+  const { allGlossary, openGlossary } = useContext(GlossaryCtx);
+  if (!children) return null;
+  return <>{linkifyText(String(children), openGlossary, allGlossary)}</>;
 }
 
 // ── Atoms ──────────────────────────────────────────────────────────────────
@@ -516,7 +526,7 @@ function ReasoningChain({ stock }) {
           </button>
           {open===l.key&&(
             <div style={{background:"var(--surface)",border:"1px solid #00e67625",borderTop:"none",borderRadius:"0 0 10px 10px",padding:"14px 18px"}}>
-              <p style={{fontSize:13,color:"var(--muted2)",lineHeight:1.7}}>{stock[l.key]}</p>
+              <p style={{fontSize:13,color:"var(--muted2)",lineHeight:1.7}}><LinkedText>{stock[l.key]}</LinkedText></p>
             </div>
           )}
         </div>
@@ -556,7 +566,7 @@ function StockCard({ stock, expanded, onToggle, livePrices, displayCcy, audUsd, 
           <div style={{fontSize:10,color:"var(--muted)",marginTop:4,fontFamily:"var(--ff-mono)"}}>tgt {stock.target}</div>
         </div>
       </div>
-      <p style={{fontSize:13,color:"var(--muted2)",lineHeight:1.7,marginTop:14}}>{stock.summary}</p>
+      <p style={{fontSize:13,color:"var(--muted2)",lineHeight:1.7,marginTop:14}}><LinkedText>{stock.summary}</LinkedText></p>
       {expanded&&<ReasoningChain stock={stock}/>}
       <div style={{marginTop:14,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
         <button onClick={onToggle} style={{background:"none",border:"none",fontSize:10,color:"var(--green)",fontFamily:"var(--ff-mono)",padding:0,letterSpacing:"0.08em",display:"flex",alignItems:"center",gap:5}}>
@@ -602,7 +612,7 @@ function NewsCard({ item }) {
       </div>
       {item.commentary && (
         <>
-          {open&&<div style={{marginTop:16,paddingTop:16,borderTop:"1px solid var(--border)"}}><div className="section-label">AI ANALYSIS</div><p style={{fontSize:13,color:"var(--muted2)",lineHeight:1.7}}>{item.commentary}</p></div>}
+          {open&&<div style={{marginTop:16,paddingTop:16,borderTop:"1px solid var(--border)"}}><div className="section-label">AI ANALYSIS</div><p style={{fontSize:13,color:"var(--muted2)",lineHeight:1.7}}><LinkedText>{item.commentary}</LinkedText></p></div>}
           <button onClick={()=>setOpen(!open)} style={{marginTop:14,background:"none",border:"none",fontSize:10,color:"var(--green)",fontFamily:"var(--ff-mono)",padding:0,letterSpacing:"0.08em",display:"flex",alignItems:"center",gap:5}}>
             <span style={{transform:open?"rotate(180deg)":"none",transition:"transform .2s",display:"inline-block"}}>▾</span>
             {open?"HIDE ANALYSIS":"AI ANALYSIS"}
@@ -799,7 +809,7 @@ function ChartCanvas({ candles, analysis, range, currency }) {
 }
 
 // ── Glossary modal ─────────────────────────────────────────────────────────
-function GlossaryModal({ open, onClose, focusTerm }) {
+function GlossaryModal({ open, onClose, focusTerm, allGlossary }) {
   const termRefs = useRef({});
   useEffect(() => {
     if (open && focusTerm && termRefs.current[focusTerm]) {
@@ -807,25 +817,36 @@ function GlossaryModal({ open, onClose, focusTerm }) {
     }
   }, [open, focusTerm]);
   if (!open) return null;
-  const sorted = [...GLOSSARY].sort((a, b) => a.term.localeCompare(b.term));
+  const gl = allGlossary || GLOSSARY;
+  const sorted = [...gl].sort((a, b) => a.term.localeCompare(b.term));
+  const builtInTerms = new Set(GLOSSARY.map(g => g.term));
+  const customCount = gl.filter(g => !builtInTerms.has(g.term)).length;
   return (
     <div onClick={onClose} style={{ position:"fixed", inset:0, background:"#00000090", zIndex:1000, display:"flex", alignItems:"flex-start", justifyContent:"center", padding:"5vh 20px", overflowY:"auto" }}>
       <div onClick={e => e.stopPropagation()} style={{ background:"var(--surface)", border:"1px solid var(--border2)", borderRadius:16, padding:"28px 32px", maxWidth:660, width:"100%", marginBottom:40 }}>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:24 }}>
           <div>
             <h2 style={{ fontFamily:"var(--ff-head)", fontSize:22, fontWeight:800, color:"var(--text2)", letterSpacing:"-0.02em" }}>Glossary</h2>
-            <p style={{ fontSize:11, color:"var(--muted)", fontFamily:"var(--ff-mono)", letterSpacing:"0.06em", marginTop:4 }}>{GLOSSARY.length} TERMS · HIGHLIGHTED WORDS IN ANALYSIS ARE CLICKABLE</p>
+            <p style={{ fontSize:11, color:"var(--muted)", fontFamily:"var(--ff-mono)", letterSpacing:"0.06em", marginTop:4 }}>
+              {gl.length} TERMS{customCount > 0 ? ` · ${GLOSSARY.length} BUILT-IN · ${customCount} AI-EXTRACTED` : ""} · CLICK ANY HIGHLIGHTED TERM
+            </p>
           </div>
           <button onClick={onClose} style={{ background:"none", border:"1px solid var(--border)", borderRadius:8, padding:"7px 16px", color:"var(--muted2)", fontSize:11, fontFamily:"var(--ff-mono)", letterSpacing:"0.06em", flexShrink:0 }}>CLOSE ✕</button>
         </div>
         <div style={{ maxHeight:"65vh", overflowY:"auto", paddingRight:4 }}>
-          {sorted.map(g => (
-            <div key={g.term} ref={el => { termRefs.current[g.term] = el; }}
-              style={{ padding:"14px", borderRadius:10, marginBottom:4, background: focusTerm===g.term ? "#ffab4012" : "none", border:`1px solid ${focusTerm===g.term ? "#ffab4040" : "transparent"}`, transition:"background .25s" }}>
-              <div style={{ fontFamily:"var(--ff-head)", fontSize:14, fontWeight:700, color: focusTerm===g.term ? "var(--amber)" : "var(--text2)", marginBottom:6 }}>{g.term}</div>
-              <p style={{ fontSize:13, color:"var(--muted2)", lineHeight:1.7, margin:0 }}>{g.def}</p>
-            </div>
-          ))}
+          {sorted.map(g => {
+            const isCustom = !builtInTerms.has(g.term);
+            return (
+              <div key={g.term} ref={el => { termRefs.current[g.term] = el; }}
+                style={{ padding:"14px", borderRadius:10, marginBottom:4, background: focusTerm===g.term ? "#ffab4012" : "none", border:`1px solid ${focusTerm===g.term ? "#ffab4040" : "transparent"}`, transition:"background .25s" }}>
+                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
+                  <span style={{ fontFamily:"var(--ff-head)", fontSize:14, fontWeight:700, color: focusTerm===g.term ? "var(--amber)" : "var(--text2)" }}>{g.term}</span>
+                  {isCustom && <span className="badge" style={{ background:"#448aff18", color:"var(--blue)", border:"1px solid #448aff35", fontSize:8 }}>AI</span>}
+                </div>
+                <p style={{ fontSize:13, color:"var(--muted2)", lineHeight:1.7, margin:0 }}>{g.def}</p>
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
@@ -901,6 +922,32 @@ export default function App() {
   const [glossaryOpen,setGlossaryOpen] = useState(false);
   const [glossaryTerm,setGlossaryTerm] = useState(null);
   const openGlossary = t => { setGlossaryTerm(t||null); setGlossaryOpen(true); };
+  const [customTerms,setCustomTerms] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("inteliq_glossary_custom") || "[]"); } catch { return []; }
+  });
+  const allGlossary = [...GLOSSARY, ...customTerms];
+
+  // Persist custom glossary terms
+  useEffect(() => { try { localStorage.setItem("inteliq_glossary_custom", JSON.stringify(customTerms)); } catch {} }, [customTerms]);
+
+  const [glossaryExtracting,setGlossaryExtracting] = useState(false);
+
+  async function extractGlossaryTerms(text) {
+    if (!text || typeof text !== "string" || text.length < 50) return;
+    try {
+      const r = await fetch("/api/glossary/extract", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      const d = await r.json();
+      if (!Array.isArray(d) || d.length === 0) return;
+      setCustomTerms(prev => {
+        const existing = new Set([...GLOSSARY, ...prev].map(g => g.term.toLowerCase()));
+        const newTerms = d.filter(t => t.term && t.definition && !existing.has(t.term.toLowerCase()));
+        return newTerms.length > 0 ? [...prev, ...newTerms] : prev;
+      });
+    } catch {}
+  }
 
   // Persist CMC
   useEffect(() => { try { localStorage.setItem("inteliq_cmc", JSON.stringify(cmcHoldings)); } catch {} }, [cmcHoldings]);
@@ -968,8 +1015,11 @@ export default function App() {
       const url = force ? "/api/dashboard/picks?force=1" : "/api/dashboard/picks";
       const r = await fetch(url);
       const d = await r.json();
-      if (Array.isArray(d) && d.length > 0) setDashPicks(d);
-      else setDashError(d.error || "No picks returned");
+      if (Array.isArray(d) && d.length > 0) {
+        setDashPicks(d);
+        const allText = d.map(p => [p.summary,p.macro,p.fundamental,p.technical,p.sentiment,p.portfolio].filter(Boolean).join(" ")).join(" ");
+        extractGlossaryTerms(allText);
+      } else setDashError(d.error || "No picks returned");
     } catch { setDashError("Could not load picks — check your connection"); }
     setDashLoading(false);
   }
@@ -1021,7 +1071,11 @@ export default function App() {
         body:JSON.stringify({ sym:data.sym, name:data.name, candles:data.candles, range:data.range, currentPrice:data.currentPrice, currency:data.currency })
       });
       const d = await r.json();
-      if (!d.error) setDetailAnalysis(d);
+      if (!d.error) {
+        setDetailAnalysis(d);
+        const allText = [d.summary,d.macro,d.fundamental,d.technical,d.sentiment,d.portfolio,d.momentum,d.volume,d.pattern?.note].filter(Boolean).join(" ");
+        extractGlossaryTerms(allText);
+      }
     } catch {}
     setDetailAnalysing(false);
   }
@@ -1056,6 +1110,8 @@ export default function App() {
       const text = data.content?.find(b=>b.type==="text")?.text||"";
       const parsed = JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}")+1));
       setResult(parsed);
+      const explorerText = [parsed.summary,parsed.macro,parsed.fundamental,parsed.technical,parsed.sentiment,parsed.portfolio].filter(Boolean).join(" ");
+      extractGlossaryTerms(explorerText);
       // Auto-fetch inline chart using display currency for crypto (BTC-USD or BTC-AUD)
       setExplorerChart(null); setExplorerChartLoading(true);
       fetch(`/api/chart/${encodeURIComponent(parsed.sym)}?range=1mo&currency=${displayCcy}`)
@@ -1104,6 +1160,7 @@ export default function App() {
   const fxLabel = `AUD/USD: ${audUsd.toFixed(4)}`;
 
   return (
+    <GlossaryCtx.Provider value={{ allGlossary, openGlossary }}>
     <>
       <style>{css}</style>
       <div style={{ display:"flex", minHeight:"100vh", background:"var(--bg)" }}>
@@ -1166,6 +1223,11 @@ export default function App() {
                     <button onClick={()=>fetchDashPicks(true)} disabled={dashLoading} style={{background:"none",border:"1px solid var(--border)",borderRadius:8,padding:"7px 16px",fontSize:10,color:dashLoading?"var(--muted)":"var(--muted2)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",opacity:dashLoading?.5:1}}>
                       {dashLoading ? "↻ LOADING…" : "↻ REFRESH"}
                     </button>
+                    {dashPicks.length > 0 && (
+                      <button onClick={async()=>{setGlossaryExtracting(true);const t=dashPicks.map(p=>[p.summary,p.macro,p.fundamental,p.technical,p.sentiment,p.portfolio].filter(Boolean).join(" ")).join(" ");await extractGlossaryTerms(t);setGlossaryExtracting(false);openGlossary();}} disabled={glossaryExtracting} style={{background:"none",border:"1px solid var(--border)",borderRadius:8,padding:"7px 16px",fontSize:10,color:glossaryExtracting?"var(--muted)":"var(--amber)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",opacity:glossaryExtracting?.5:1}}>
+                        {glossaryExtracting ? "◈ UPDATING…" : "◈ UPDATE GLOSSARY"}
+                      </button>
+                    )}
                     <CurrencyToggle value={displayCcy} onChange={setDisplayCcy}/>
                   </div>
                 </div>
@@ -1614,7 +1676,7 @@ export default function App() {
 
                   {/* Summary */}
                   <div className="card" style={{padding:20}}>
-                    <p style={{fontSize:13,color:"var(--muted2)",lineHeight:1.7,margin:0}}>{linkifyText(detailAnalysis.summary, openGlossary)}</p>
+                    <p style={{fontSize:13,color:"var(--muted2)",lineHeight:1.7,margin:0}}>{linkifyText(detailAnalysis.summary, openGlossary, allGlossary)}</p>
                     {detailAnalysis.stopLoss && <div style={{marginTop:10,fontSize:12,fontFamily:"var(--ff-mono)",color:"var(--red)"}}>Stop loss: {detailAnalysis.stopLoss}</div>}
                   </div>
 
@@ -1636,7 +1698,7 @@ export default function App() {
                       ].filter(x=>x.v).map(({l,v},i,arr)=>(
                         <div key={l} style={{paddingBottom:i<arr.length-1?14:0,borderBottom:i<arr.length-1?"1px solid var(--border)":"none"}}>
                           <div style={{fontSize:9,fontFamily:"var(--ff-mono)",color:"var(--muted)",letterSpacing:"0.12em",marginBottom:5}}>{l}</div>
-                          <p style={{fontSize:13,color:"var(--muted2)",lineHeight:1.7,margin:0}}>{linkifyText(v, openGlossary)}</p>
+                          <p style={{fontSize:13,color:"var(--muted2)",lineHeight:1.7,margin:0}}>{linkifyText(v, openGlossary, allGlossary)}</p>
                         </div>
                       ))}
                     </div>
@@ -1683,19 +1745,19 @@ export default function App() {
                             <span style={{fontFamily:"var(--ff-head)",fontSize:14,fontWeight:700,color:detailAnalysis.pattern.bullish?"var(--green)":"var(--red)"}}>{detailAnalysis.pattern.name}</span>
                             <span className="badge" style={{background:detailAnalysis.pattern.bullish?"#00e67618":"#ff525218",color:detailAnalysis.pattern.bullish?"var(--green)":"var(--red)",border:`1px solid ${detailAnalysis.pattern.bullish?"#00e67640":"#ff525240"}`}}>{detailAnalysis.pattern.bullish?"BULLISH":"BEARISH"}</span>
                           </div>
-                          {detailAnalysis.pattern.note && <p style={{fontSize:12,color:"var(--muted2)",lineHeight:1.6}}>{linkifyText(detailAnalysis.pattern.note, openGlossary)}</p>}
+                          {detailAnalysis.pattern.note && <p style={{fontSize:12,color:"var(--muted2)",lineHeight:1.6}}>{linkifyText(detailAnalysis.pattern.note, openGlossary, allGlossary)}</p>}
                         </div>
                       )}
                       {detailAnalysis.momentum && (
                         <div style={{marginBottom:detailAnalysis.volume?14:0}}>
                           <div className="section-label">MOMENTUM</div>
-                          <p style={{fontSize:12,color:"var(--muted2)",lineHeight:1.6}}>{linkifyText(detailAnalysis.momentum, openGlossary)}</p>
+                          <p style={{fontSize:12,color:"var(--muted2)",lineHeight:1.6}}>{linkifyText(detailAnalysis.momentum, openGlossary, allGlossary)}</p>
                         </div>
                       )}
                       {detailAnalysis.volume && (
                         <div>
                           <div className="section-label">VOLUME</div>
-                          <p style={{fontSize:12,color:"var(--muted2)",lineHeight:1.6}}>{linkifyText(detailAnalysis.volume, openGlossary)}</p>
+                          <p style={{fontSize:12,color:"var(--muted2)",lineHeight:1.6}}>{linkifyText(detailAnalysis.volume, openGlossary, allGlossary)}</p>
                         </div>
                       )}
                     </div>
@@ -1707,7 +1769,8 @@ export default function App() {
 
         </main>
       </div>
-      <GlossaryModal open={glossaryOpen} onClose={()=>setGlossaryOpen(false)} focusTerm={glossaryTerm}/>
+      <GlossaryModal open={glossaryOpen} onClose={()=>setGlossaryOpen(false)} focusTerm={glossaryTerm} allGlossary={allGlossary}/>
     </>
+    </GlossaryCtx.Provider>
   );
 }

@@ -500,6 +500,35 @@ Rules: ASX tickers must end in .AX. Use standard crypto symbols (BTC, ETH, SOL e
 });
 
 
+// ── Glossary term extraction ────────────────────────────────────────────────
+app.post("/api/glossary/extract", async (req, res) => {
+  const { text } = req.body || {};
+  if (!text || typeof text !== "string") return res.json([]);
+  try {
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 1200,
+        system: `You are a financial glossary extractor. Given investment analysis text, identify technical terms related to stocks, crypto, finance, economics, or trading that a retail investor might not know. Return ONLY a valid JSON array (no markdown) of new terms not in common knowledge. Each item: {"term":"Term","definition":"Clear 1-2 sentence definition for a retail investor."}. Return [] if no new terms found. Limit to 8 terms maximum.`,
+        messages: [{ role: "user", content: `Extract financial/investment terms from this text:\n\n${text.slice(0, 3000)}` }],
+      }),
+    });
+    const d = await response.json();
+    const raw = d.content?.find(b => b.type === "text")?.text || "[]";
+    const start = raw.indexOf("[");
+    const end   = raw.lastIndexOf("]");
+    if (start === -1 || end === -1) return res.json([]);
+    const parsed = JSON.parse(raw.slice(start, end + 1));
+    res.json(Array.isArray(parsed) ? parsed : []);
+  } catch (err) {
+    console.error("Glossary extract error:", err.message);
+    res.json([]);
+  }
+});
+
+
 // ── Health ─────────────────────────────────────────────────────────────────
 app.get("/health", (_, res) => res.json({
   status: "ok",
