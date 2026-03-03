@@ -135,6 +135,7 @@ const TABS = [
   { id:"portfolio", label:"Portfolio", icon:"◑" },
   { id:"coach",     label:"Coach",     icon:"◭" },
   { id:"news",      label:"News",      icon:"◉" },
+  { id:"macro",     label:"Macro",     icon:"◮" },
   { id:"watchlist", label:"Watchlist", icon:"◇" },
   { id:"earnings",  label:"Earnings",  icon:"◬" },
   { id:"ipo",       label:"IPO",       icon:"◆" },
@@ -1303,6 +1304,11 @@ export default function App() {
   const [ipoFilter,  setIpoFilter]  = useState("ALL");
   const [ipoError,   setIpoError]   = useState(null);
 
+  // Macro Calendar
+  const [macroEvents,  setMacroEvents]  = useState([]);
+  const [macroLoading, setMacroLoading] = useState(false);
+  const [macroError,   setMacroError]   = useState(null);
+
   // Natural Language Screener
   const [screenerQ,       setScreenerQ]       = useState("");
   const [screenerResults, setScreenerResults] = useState(null);
@@ -1493,6 +1499,16 @@ export default function App() {
     if (tab !== "coach" || allHoldings.length === 0) return;
     if (!coachReport && !coachLoading) runCoachAnalysis();
   }, [tab, allHoldings.length]);
+
+  useEffect(() => {
+    if (tab !== "macro") return;
+    if (macroEvents.length && !macroError) return; // already loaded
+    setMacroLoading(true); setMacroError(null);
+    const holdingSyms = [...new Set([...allHoldings.map(h=>h.sym), ...watchlist.map(w=>w.sym)])];
+    fetch("/api/macro", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ holdingSyms }) })
+      .then(r => r.json()).then(d => { if (d.error) setMacroError(d.error); else setMacroEvents(d); })
+      .catch(()=>setMacroError("Could not load macro calendar")).finally(()=>setMacroLoading(false));
+  }, [tab]);
 
   useEffect(() => {
     if (tab !== "earnings") return;
@@ -2156,6 +2172,89 @@ export default function App() {
                   )}
                 </div>
               )}
+            </div>
+          )}
+
+          {/* ══ MACRO CALENDAR ══ */}
+          {tab==="macro"&&(
+            <div>
+              <div className="fu" style={{marginBottom:24}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap"}}>
+                  <div>
+                    <h1 style={{fontFamily:"var(--ff-head)",fontSize:26,fontWeight:800,color:"var(--text2)",marginBottom:6}}>Macro Calendar</h1>
+                    <p style={{fontSize:13,color:"var(--muted2)"}}>Upcoming central bank decisions and data releases — contextualised against your portfolio.</p>
+                  </div>
+                  <button onClick={()=>{setMacroEvents([]);setMacroError(null);setMacroLoading(true);const syms=[...new Set([...allHoldings.map(h=>h.sym),...watchlist.map(w=>w.sym)])];fetch("/api/macro",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({holdingSyms:syms})}).then(r=>r.json()).then(d=>{if(d.error)setMacroError(d.error);else setMacroEvents(d);}).catch(()=>setMacroError("Failed")).finally(()=>setMacroLoading(false));}} disabled={macroLoading} style={{background:"none",border:"1px solid var(--border)",borderRadius:8,padding:"7px 16px",fontSize:10,color:macroLoading?"var(--muted)":"var(--muted2)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",opacity:macroLoading?.5:1}}>
+                    {macroLoading?"↻ LOADING…":"↻ REFRESH"}
+                  </button>
+                </div>
+              </div>
+
+              {macroLoading && <div style={{display:"grid",gap:10}}>{[1,2,3,4].map(i=><div key={i} className="shimmer-el" style={{height:120}}/>)}</div>}
+              {macroError && (
+                <div style={{background:"#ff525212",border:"1px solid #ff525230",borderRadius:12,padding:"20px 24px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:12}}>
+                  <p style={{fontSize:13,color:"var(--red)"}}>{macroError}</p>
+                </div>
+              )}
+              {!macroLoading && macroEvents.length > 0 && (() => {
+                const now = new Date();
+                const catColor = {FED:"var(--blue)",RBA:"var(--amber)",ECB:"var(--purple)",INFLATION:"var(--red)",EMPLOYMENT:"var(--green)",GROWTH:"var(--text2)",TRADE:"var(--muted2)",OTHER:"var(--muted2)"};
+                const impColor = {HIGH:"var(--red)",MEDIUM:"var(--amber)",LOW:"var(--muted)"};
+                return (
+                  <div className="fu2">
+                    {macroEvents.map((ev, i) => {
+                      const evDate = new Date(ev.date);
+                      const isPast = evDate < now;
+                      const diffDays = Math.round((evDate - now) / 86400000);
+                      const countdown = isPast ? `${Math.abs(diffDays)}d ago` : diffDays === 0 ? "TODAY" : diffDays === 1 ? "Tomorrow" : `in ${diffDays}d`;
+                      const cc = catColor[ev.category] || "var(--muted2)";
+                      return (
+                        <div key={i} className="card" style={{padding:20,marginBottom:10,borderLeft:`3px solid ${impColor[ev.importance]||"var(--border)"}`,opacity:isPast?0.6:1}}>
+                          <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"flex-start",flexWrap:"wrap"}}>
+                            <div style={{flex:1,minWidth:0}}>
+                              <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:8,flexWrap:"wrap"}}>
+                                <span className="badge" style={{background:`${cc}18`,color:cc,border:`1px solid ${cc}35`}}>{ev.category}</span>
+                                <span className="badge" style={{background:`${impColor[ev.importance]}18`,color:impColor[ev.importance],border:`1px solid ${impColor[ev.importance]}35`}}>{ev.importance}</span>
+                                <span className="badge" style={{background:"var(--surface)",color:"var(--muted2)",border:"1px solid var(--border)"}}>{ev.country}</span>
+                                {isPast && <span className="badge" style={{background:"var(--surface)",color:"var(--muted)",border:"1px solid var(--border)"}}>PAST</span>}
+                              </div>
+                              <div style={{fontFamily:"var(--ff-head)",fontSize:15,fontWeight:700,color:"var(--text2)",marginBottom:6}}>{ev.event}</div>
+                              <p style={{fontSize:12,color:"var(--muted2)",lineHeight:1.6,marginBottom:ev.portfolioImpact?10:0}}>{ev.preview}</p>
+                              {ev.portfolioImpact && (
+                                <div style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:8,padding:"10px 14px",marginBottom:8}}>
+                                  <div style={{fontSize:9,fontFamily:"var(--ff-mono)",color:"var(--muted)",letterSpacing:"0.1em",marginBottom:4}}>PORTFOLIO IMPACT</div>
+                                  <p style={{fontSize:12,color:"var(--muted2)",lineHeight:1.5,margin:0}}>{ev.portfolioImpact}</p>
+                                </div>
+                              )}
+                              {!isPast && (ev.bullCase || ev.bearCase) && (
+                                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                                  {ev.bullCase && <div style={{background:"#00e67610",border:"1px solid #00e67625",borderRadius:7,padding:"8px 12px"}}>
+                                    <div style={{fontSize:9,fontFamily:"var(--ff-mono)",color:"var(--green)",marginBottom:4,letterSpacing:"0.08em"}}>BULL CASE</div>
+                                    <p style={{fontSize:11,color:"var(--muted2)",lineHeight:1.5,margin:0}}>{ev.bullCase}</p>
+                                  </div>}
+                                  {ev.bearCase && <div style={{background:"#ff525210",border:"1px solid #ff525225",borderRadius:7,padding:"8px 12px"}}>
+                                    <div style={{fontSize:9,fontFamily:"var(--ff-mono)",color:"var(--red)",marginBottom:4,letterSpacing:"0.08em"}}>BEAR CASE</div>
+                                    <p style={{fontSize:11,color:"var(--muted2)",lineHeight:1.5,margin:0}}>{ev.bearCase}</p>
+                                  </div>}
+                                </div>
+                              )}
+                              {ev.affectedHoldings?.length > 0 && (
+                                <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:10}}>
+                                  {ev.affectedHoldings.map(s=><span key={s} className="badge" style={{background:"var(--surface)",color:"var(--muted2)",border:"1px solid var(--border)"}}>{s}</span>)}
+                                </div>
+                              )}
+                            </div>
+                            <div style={{textAlign:"right",flexShrink:0}}>
+                              <div style={{fontSize:11,fontFamily:"var(--ff-mono)",color:!isPast&&diffDays<=7?"var(--amber)":"var(--muted2)",fontWeight:600,marginBottom:4}}>{countdown}</div>
+                              <div style={{fontSize:10,color:"var(--muted)",fontFamily:"var(--ff-mono)"}}>{ev.date}</div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
             </div>
           )}
 
