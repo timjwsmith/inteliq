@@ -760,6 +760,36 @@ app.post("/api/glossary/extract", async (req, res) => {
 });
 
 
+// ── Trade Journal Pattern Analysis ────────────────────────────────────────
+app.post("/api/journal/analyse", async (req, res) => {
+  const { entries } = req.body;
+  if (!entries?.length) return res.status(400).json({ error: "entries required" });
+  const today = new Date().toLocaleDateString("en-AU", { year:"numeric", month:"long", day:"numeric" });
+  const lines = entries.map(e =>
+    `- ${e.date} | ${e.action} | ${e.sym} | qty:${e.qty} | price:${e.price} ${e.currency||"USD"} | thesis:"${e.thesis||"none"}"${e.exitDate?` | exited:${e.exitDate} @ ${e.exitPrice}`:""}`
+  );
+  try {
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type":"application/json", "x-api-key":ANTHROPIC_API_KEY, "anthropic-version":"2023-06-01" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514", max_tokens: 1500,
+        system: `You are a trading coach specialising in behavioural finance. Today is ${today}. Analyse this trade journal for patterns and provide honest, direct coaching. Focus on behavioural patterns not just performance. Return ONLY valid JSON:
+{"summary":"2-3 sentences overall assessment","patterns":[{"pattern":"Name of behavioural pattern","description":"1-2 sentences explaining the pattern with specific examples from the journal","severity":"HIGH|MEDIUM|LOW","advice":"Specific actionable advice to address this"}],"strengths":["short string"],"weaknesses":["short string"],"winRate":"X% (N/N trades)" or null,"avgHoldDays":number or null,"topMistake":"1 sentence on the single biggest mistake","keyAdvice":"The most important piece of advice in 1-2 sentences"}`,
+        messages: [{ role:"user", content: `Analyse my trade journal (${entries.length} entries):\n\n${lines.join("\n")}` }],
+      }),
+    });
+    const d = await response.json();
+    const text = d.content?.find(b => b.type === "text")?.text || "";
+    const s = text.indexOf("{"), e = text.lastIndexOf("}");
+    if (s === -1 || e === -1) throw new Error("No JSON");
+    res.json(JSON.parse(text.slice(s, e + 1)));
+  } catch (err) {
+    console.error("Journal analyse error:", err.message);
+    res.status(500).json({ error: "Analysis failed" });
+  }
+});
+
 // ── Macro Event Calendar ───────────────────────────────────────────────────
 let macroCache = { events: null, ts: 0 };
 
