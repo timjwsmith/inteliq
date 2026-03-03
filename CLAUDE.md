@@ -77,9 +77,14 @@ A full-stack React + Express investment dashboard. Live stock/crypto data, AI-po
 
 ## API endpoints (server.js)
 - POST `/api/analyse` — Anthropic proxy for stock/crypto analysis (Explorer search)
-- POST `/api/analyse/detail` — unified analysis: live OHLCV + fundamentals/macro → single verdict
+- POST `/api/analyse/detail` — unified analysis: live OHLCV + fundamentals + indicators → single verdict
+  - Accepts: `{ sym, name, candles, range, currentPrice, currency, indicators, fundamentals }`
+  - Injects LIVE FUNDAMENTAL DATA and COMPUTED TECHNICAL INDICATORS blocks into the Claude system prompt
 - GET  `/api/chart/:sym?range=1d|7d|1mo|3mo|1y&currency=USD|AUD` — OHLCV from Yahoo Finance
   - Crypto symbols auto-suffixed: BTC → BTC-USD or BTC-AUD based on currency param
+  - Response now includes `indicators` object: `{ ema50, ema200, rsi, macd: { macd, signal, histogram }, bb: { upper, middle, lower } }`
+- GET  `/api/fundamentals/:sym` — FMP live fundamentals (stocks only; returns null for crypto/missing key)
+  - Returns: `{ pe, evEbitda, fcfYield, debtEquity, roe, marketCap, earningsSurprises, analystConsensus }`
 - GET  `/api/price?sym=X&type=stock|crypto` — single live price
 - POST `/api/prices` — batch live prices (crypto batched into one CoinGecko call)
 - GET  `/api/fx/audusd` — live AUD/USD rate
@@ -104,7 +109,7 @@ trailing text/commentary that Claude occasionally appends after the JSON.
 - Key requires **Coinbase App & Advanced Trade → View (read-only)** permission
 
 ## Environment variables (.env)
-ANTHROPIC_API_KEY, COINBASE_API_KEY, COINBASE_API_SECRET, COINSPOT_API_KEY, COINSPOT_API_SECRET, FINNHUB_API_KEY (optional)
+ANTHROPIC_API_KEY, COINBASE_API_KEY, COINBASE_API_SECRET, COINSPOT_API_KEY, COINSPOT_API_SECRET, FINNHUB_API_KEY (optional), FMP_API_KEY (financialmodelingprep.com — for live fundamentals)
 
 ## Deployment
 docker-compose down && docker-compose up --build --force-recreate
