@@ -135,6 +135,7 @@ const TABS = [
   { id:"coach",     label:"Coach",     icon:"◭" },
   { id:"news",      label:"News",      icon:"◉" },
   { id:"watchlist", label:"Watchlist", icon:"◇" },
+  { id:"earnings",  label:"Earnings",  icon:"◬" },
   { id:"ipo",       label:"IPO",       icon:"◆" },
   { id:"calls",     label:"Calls",     icon:"◐" },
 ];
@@ -1301,6 +1302,12 @@ export default function App() {
   const [ipoFilter,  setIpoFilter]  = useState("ALL");
   const [ipoError,   setIpoError]   = useState(null);
 
+  // Earnings Calendar
+  const [earningsData,    setEarningsData]    = useState({});
+  const [earningsLoading, setEarningsLoading] = useState(false);
+  const [earningsBriefs,  setEarningsBriefs]  = useState({});  // keyed by sym
+  const [earningsBriefing,setEarningsBriefing]= useState({});  // loading states
+
   // Portfolio Coach
   const [coachReport,  setCoachReport]  = useState(null);
   const [coachLoading, setCoachLoading] = useState(false);
@@ -1479,6 +1486,19 @@ export default function App() {
     if (tab !== "coach" || allHoldings.length === 0) return;
     if (!coachReport && !coachLoading) runCoachAnalysis();
   }, [tab, allHoldings.length]);
+
+  useEffect(() => {
+    if (tab !== "earnings") return;
+    const allSyms = [...new Set([
+      ...allHoldings.map(h => h.sym),
+      ...watchlist.map(w => w.sym),
+    ])].filter(s => !["BTC","ETH","SOL","BNB","XRP","ADA","DOGE","AVAX"].includes(s.toUpperCase()));
+    if (!allSyms.length) return;
+    setEarningsLoading(true);
+    fetch("/api/earnings", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ symbols: allSyms }) })
+      .then(r => r.json()).then(d => setEarningsData(d)).catch(() => {})
+      .finally(() => setEarningsLoading(false));
+  }, [tab]);
 
   async function openDetail(symInfo, stock = null, preloadedAnalysis = null) {
     setDetailFrom(tab);
@@ -1666,6 +1686,30 @@ export default function App() {
       if (d.error) setCoachError(d.error); else setCoachReport(d);
     } catch { setCoachError("Analysis failed — check your connection"); }
     setCoachLoading(false);
+  }
+
+  async function fetchEarningsBrief(sym, upcomingDate, recentSurprises) {
+    setEarningsBriefing(p => ({...p, [sym]: true}));
+    const today = new Date().toLocaleDateString("en-AU",{year:"numeric",month:"long",day:"numeric"});
+    const surpriseCtx = recentSurprises?.length
+      ? `Recent EPS surprises: ${recentSurprises.map(e => `${e.date} actual ${e.epsActual} vs est ${e.epsEstimated} (${e.surprise||"?"}) `).join(", ")}.`
+      : "";
+    try {
+      const r = await fetch("/api/analyse", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({
+          model:"claude-sonnet-4-20250514", max_tokens:600,
+          system:`You are a senior analyst. Today is ${today}. Return ONLY valid JSON:
+{"watch":"Key metric/number to watch for","consensus":"What the market expects — be specific","risk":"Main earnings risk in 1 sentence","setup":"Technical/positioning setup going into earnings in 1 sentence","verdict":"BEAT_LIKELY|MISS_LIKELY|IN_LINE|UNCERTAIN"}`,
+          messages:[{role:"user",content:`Pre-earnings brief for ${sym}. Upcoming date: ${upcomingDate||"next quarter"}. ${surpriseCtx} What should investors watch?`}],
+        }),
+      });
+      const d = await r.json();
+      const text = d.content?.find(b=>b.type==="text")?.text||"";
+      const start = text.indexOf("{"), end = text.lastIndexOf("}");
+      if (start !== -1 && end !== -1) setEarningsBriefs(p => ({...p, [sym]: JSON.parse(text.slice(start, end+1))}));
+    } catch {}
+    setEarningsBriefing(p => ({...p, [sym]: false}));
   }
 
   function recordCall(parsed, source) {
@@ -2272,6 +2316,134 @@ export default function App() {
                   </div>
                 );
               })() : null}
+            </div>
+          )}
+
+          {/* ══ EARNINGS CALENDAR ══ */}
+          {tab==="earnings"&&(
+            <div>
+              <div className="fu" style={{marginBottom:24}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap"}}>
+                  <div>
+                    <h1 style={{fontFamily:"var(--ff-head)",fontSize:26,fontWeight:800,color:"var(--text2)",marginBottom:6}}>Earnings Calendar</h1>
+                    <p style={{fontSize:13,color:"var(--muted2)"}}>Upcoming & recent earnings for your holdings and watchlist. Get an AI brief before each one.</p>
+                  </div>
+                  <button onClick={()=>{setEarningsData({});setEarningsBriefs({});}} disabled={earningsLoading} style={{background:"none",border:"1px solid var(--border)",borderRadius:8,padding:"7px 16px",fontSize:10,color:earningsLoading?"var(--muted)":"var(--muted2)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",opacity:earningsLoading?.5:1}}>
+                    {earningsLoading?"↻ LOADING…":"↻ REFRESH"}
+                  </button>
+                </div>
+              </div>
+
+              {Object.keys(earningsData).length === 0 && !earningsLoading && (
+                <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:12,padding:"32px",textAlign:"center",marginBottom:16}}>
+                  <p style={{color:"var(--muted2)",fontSize:13,marginBottom:8}}>No earnings data found.</p>
+                  <p style={{color:"var(--muted)",fontSize:12}}>Ensure <code style={{fontFamily:"var(--ff-mono)",color:"var(--amber)"}}>FMP_API_KEY</code> is set in your .env and you have holdings or watchlist items.</p>
+                </div>
+              )}
+
+              {earningsLoading && (
+                <div style={{display:"grid",gap:10}}>{[1,2,3,4].map(i=><div key={i} className="shimmer-el" style={{height:80}}/>)}</div>
+              )}
+
+              {!earningsLoading && (() => {
+                const now = new Date();
+                const allEntries = [];
+                Object.entries(earningsData).forEach(([sym, events]) => {
+                  events.forEach(ev => {
+                    const d = new Date(ev.date);
+                    allEntries.push({ sym, ...ev, dateObj: d, isFuture: d >= now });
+                  });
+                });
+                const upcoming = allEntries.filter(e => e.isFuture).sort((a,b) => a.dateObj - b.dateObj);
+                const recent   = allEntries.filter(e => !e.isFuture && (now - e.dateObj) < 60 * 86400000).sort((a,b) => b.dateObj - a.dateObj);
+
+                if (allEntries.length === 0 && Object.keys(earningsData).length > 0) {
+                  return <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:12,padding:"32px",textAlign:"center"}}><p style={{color:"var(--muted2)",fontSize:13}}>No earnings data found for your holdings/watchlist.</p></div>;
+                }
+                if (allEntries.length === 0) return null;
+
+                function EarningsRow({ e }) {
+                  const brief = earningsBriefs[e.sym];
+                  const loading = earningsBriefing[e.sym];
+                  const surprises = earningsData[e.sym]?.filter(x => x.epsActual != null && x.epsEstimated != null) || [];
+                  const verdictColor = {BEAT_LIKELY:"var(--green)",MISS_LIKELY:"var(--red)",IN_LINE:"var(--amber)",UNCERTAIN:"var(--muted2)"};
+                  const diffDays = Math.round((e.dateObj - now) / 86400000);
+                  const countdown = e.isFuture
+                    ? diffDays === 0 ? "TODAY" : diffDays === 1 ? "Tomorrow" : `in ${diffDays}d`
+                    : Math.abs(diffDays) <= 1 ? "Yesterday" : `${Math.abs(diffDays)}d ago`;
+                  const countdownColor = e.isFuture && diffDays <= 7 ? "var(--amber)" : e.isFuture ? "var(--text2)" : "var(--muted)";
+                  const surprise = e.epsActual != null && e.epsEstimated != null
+                    ? ((e.epsActual - e.epsEstimated) / Math.abs(e.epsEstimated || 1) * 100) : null;
+
+                  return (
+                    <div className="card" style={{padding:18,marginBottom:10}}>
+                      <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"flex-start",flexWrap:"wrap"}}>
+                        <div style={{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
+                          <div style={{width:40,height:40,borderRadius:10,background:"var(--surface)",border:"1px solid var(--border)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                            <span style={{fontFamily:"var(--ff-head)",fontSize:10,fontWeight:800,color:"var(--muted2)"}}>{e.sym.replace(".AX","").slice(0,3)}</span>
+                          </div>
+                          <div>
+                            <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:3,flexWrap:"wrap"}}>
+                              <span style={{fontFamily:"var(--ff-head)",fontSize:14,fontWeight:700,color:"var(--text2)"}}>{e.sym}</span>
+                              <span style={{fontSize:11,fontFamily:"var(--ff-mono)",color:countdownColor,fontWeight:600}}>{countdown}</span>
+                              <span style={{fontSize:10,color:"var(--muted)",fontFamily:"var(--ff-mono)"}}>{e.date}</span>
+                              {e.time && <span className="badge" style={{background:"var(--surface)",color:"var(--muted2)",border:"1px solid var(--border)"}}>{e.time}</span>}
+                            </div>
+                            {!e.isFuture && surprise != null && (
+                              <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                                <span style={{fontSize:11,fontFamily:"var(--ff-mono)",color:"var(--muted2)"}}>EPS actual: <span style={{color:"var(--text2)",fontWeight:600}}>{e.epsActual?.toFixed(2)}</span></span>
+                                <span style={{fontSize:11,fontFamily:"var(--ff-mono)",color:"var(--muted2)"}}>est: {e.epsEstimated?.toFixed(2)}</span>
+                                <span className="badge" style={{background:surprise>=0?"#00e67618":"#ff525218",color:surprise>=0?"var(--green)":"var(--red)",border:`1px solid ${surprise>=0?"#00e67640":"#ff525240"}`}}>
+                                  {surprise>=0?"+":""}{surprise.toFixed(1)}% surprise
+                                </span>
+                              </div>
+                            )}
+                            {e.isFuture && e.epsEstimated != null && (
+                              <span style={{fontSize:11,fontFamily:"var(--ff-mono)",color:"var(--muted2)"}}>Est EPS: <span style={{color:"var(--text2)"}}>{e.epsEstimated?.toFixed(2)}</span></span>
+                            )}
+                          </div>
+                        </div>
+                        {e.isFuture && (
+                          <button onClick={()=>fetchEarningsBrief(e.sym, e.date, surprises.slice(0,4))} disabled={loading} style={{background:loading?"none":"var(--surface)",border:`1px solid ${brief?"var(--green)50":"var(--border)"}`,borderRadius:8,padding:"6px 14px",fontSize:10,color:loading?"var(--muted)":brief?"var(--green)":"var(--muted2)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",flexShrink:0}}>
+                            {loading?"BRIEFING…":brief?"✓ BRIEFED":"GET AI BRIEF"}
+                          </button>
+                        )}
+                      </div>
+                      {brief && (
+                        <div style={{marginTop:14,paddingTop:14,borderTop:"1px solid var(--border)",display:"grid",gap:10}}>
+                          <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                            <span className="badge" style={{background:`${verdictColor[brief.verdict]||"var(--muted)"}18`,color:verdictColor[brief.verdict]||"var(--muted2)",border:`1px solid ${verdictColor[brief.verdict]||"var(--border)"}40`}}>{brief.verdict?.replace("_"," ")}</span>
+                            <span style={{fontSize:11,fontFamily:"var(--ff-mono)",color:"var(--muted)",letterSpacing:"0.06em"}}>AI PRE-EARNINGS BRIEF</span>
+                          </div>
+                          {[{l:"WATCH FOR",v:brief.watch},{l:"CONSENSUS",v:brief.consensus},{l:"KEY RISK",v:brief.risk},{l:"SETUP",v:brief.setup}].filter(x=>x.v).map(({l,v})=>(
+                            <div key={l}>
+                              <div style={{fontSize:9,fontFamily:"var(--ff-mono)",color:"var(--muted)",letterSpacing:"0.1em",marginBottom:3}}>{l}</div>
+                              <p style={{fontSize:12,color:"var(--muted2)",lineHeight:1.5,margin:0}}>{v}</p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                }
+
+                return (
+                  <>
+                    {upcoming.length > 0 && (
+                      <div className="fu2" style={{marginBottom:28}}>
+                        <div className="section-label">UPCOMING EARNINGS ({upcoming.length})</div>
+                        {upcoming.map((e,i) => <EarningsRow key={`${e.sym}-${e.date}-${i}`} e={e}/>)}
+                      </div>
+                    )}
+                    {recent.length > 0 && (
+                      <div className="fu3">
+                        <div className="section-label">RECENT RESULTS</div>
+                        {recent.map((e,i) => <EarningsRow key={`${e.sym}-${e.date}-${i}`} e={e}/>)}
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
             </div>
           )}
 
