@@ -1305,6 +1305,14 @@ export default function App() {
   const [ipoFilter,  setIpoFilter]  = useState("ALL");
   const [ipoError,   setIpoError]   = useState(null);
 
+  // Watchlist Alerts
+  const [alerts,         setAlerts]         = useState(() => {
+    try { return JSON.parse(localStorage.getItem("inteliq_alerts") || "{}"); } catch { return {}; }
+  });  // keyed by sym: { type, value, note, triggered, triggeredAt }
+  const [triggeredAlerts,setTriggeredAlerts]= useState([]);  // sym list for in-session notifications
+  const [alertEditSym,   setAlertEditSym]   = useState(null); // sym currently being edited
+  const [alertFormVal,   setAlertFormVal]   = useState({ type:"price_above", value:"", note:"" });
+
   // Trade Journal
   const [journalEntries,  setJournalEntries]  = useState(() => {
     try { return JSON.parse(localStorage.getItem("inteliq_journal") || "[]"); } catch { return []; }
@@ -1404,6 +1412,8 @@ export default function App() {
   useEffect(() => { try { localStorage.setItem("inteliq_calls", JSON.stringify(callRecords)); } catch {} }, [callRecords]);
   // Persist journal
   useEffect(() => { try { localStorage.setItem("inteliq_journal", JSON.stringify(journalEntries)); } catch {} }, [journalEntries]);
+  // Persist alerts
+  useEffect(() => { try { localStorage.setItem("inteliq_alerts", JSON.stringify(alerts)); } catch {} }, [alerts]);
 
   // Fetch FX rate on mount
   useEffect(() => {
@@ -1513,6 +1523,43 @@ export default function App() {
     if (tab !== "coach" || allHoldings.length === 0) return;
     if (!coachReport && !coachLoading) runCoachAnalysis();
   }, [tab, allHoldings.length]);
+
+  // Poll prices for active alerts every 60s
+  useEffect(() => {
+    const activeAlerts = Object.entries(alerts).filter(([,a]) => a.value && !a.triggered);
+    if (!activeAlerts.length) return;
+    function checkAlerts(prices) {
+      setTriggeredAlerts(prev => {
+        const newTriggers = [...prev];
+        const updatedAlerts = { ...alerts };
+        let changed = false;
+        activeAlerts.forEach(([sym, alert]) => {
+          const price = prices[sym]?.price;
+          if (price == null) return;
+          let hit = false;
+          if (alert.type === "price_above"  && price >= parseFloat(alert.value)) hit = true;
+          if (alert.type === "price_below"  && price <= parseFloat(alert.value)) hit = true;
+          if (alert.type === "change_up"    && (prices[sym]?.change || 0) >= parseFloat(alert.value)) hit = true;
+          if (alert.type === "change_down"  && (prices[sym]?.change || 0) <= -Math.abs(parseFloat(alert.value))) hit = true;
+          if (hit && !updatedAlerts[sym].triggered) {
+            updatedAlerts[sym] = { ...updatedAlerts[sym], triggered: true, triggeredAt: new Date().toISOString() };
+            if (!newTriggers.includes(sym)) newTriggers.push(sym);
+            changed = true;
+          }
+        });
+        if (changed) setAlerts(updatedAlerts);
+        return newTriggers;
+      });
+    }
+    const syms = activeAlerts.map(([sym]) => ({ sym, type: watchlist.find(w=>w.sym===sym)?.priceType || "stock" }));
+    fetch("/api/prices", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ symbols: syms }) })
+      .then(r => r.json()).then(checkAlerts).catch(() => {});
+    const interval = setInterval(() => {
+      fetch("/api/prices", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ symbols: syms }) })
+        .then(r => r.json()).then(checkAlerts).catch(() => {});
+    }, 60000);
+    return () => clearInterval(interval);
+  }, [alerts, watchlist]);
 
   useEffect(() => {
     if (tab !== "macro") return;
@@ -2391,11 +2438,47 @@ export default function App() {
                             <button onClick={()=>openDetail({sym:w.sym,name:w.name,priceType:w.priceType,priceCurrency:w.priceCurrency,sector:w.sector})} style={{background:"none",border:"1px solid var(--border)",borderRadius:8,padding:"7px 14px",color:"var(--muted2)",fontSize:11,fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",flexShrink:0}}>
                               CHART
                             </button>
+                            <button onClick={()=>{setAlertEditSym(p=>p===w.sym?null:w.sym);const ex=alerts[w.sym];setAlertFormVal(ex?{type:ex.type,value:ex.value,note:ex.note||""}:{type:"price_above",value:"",note:""}); }} style={{background:alerts[w.sym]?`${triggeredAlerts.includes(w.sym)?"var(--amber)":"var(--purple)"}18`:"none",border:`1px solid ${alerts[w.sym]?(triggeredAlerts.includes(w.sym)?"var(--amber)40":"var(--purple)40"):"var(--border)"}`,borderRadius:8,padding:"7px 14px",color:alerts[w.sym]?(triggeredAlerts.includes(w.sym)?"var(--amber)":"var(--purple)"):"var(--muted2)",fontSize:11,fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",flexShrink:0}}>
+                              {triggeredAlerts.includes(w.sym)?"🔔 ALERT":alerts[w.sym]?"◎ ALERT":"+ ALERT"}
+                            </button>
                             <button onClick={()=>setWatchlist(prev=>prev.filter(x=>x.sym!==w.sym))} style={{background:"#ff525218",border:"1px solid #ff525240",borderRadius:8,padding:"7px 14px",color:"var(--red)",fontSize:11,fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",flexShrink:0}}>
                               REMOVE
                             </button>
                           </div>
                         </div>
+
+                        {/* Alert form */}
+                        {alertEditSym===w.sym && (
+                          <div style={{marginTop:12,paddingTop:12,borderTop:"1px solid var(--border)"}}>
+                            <div style={{display:"flex",gap:8,alignItems:"flex-end",flexWrap:"wrap"}}>
+                              <div>
+                                <div style={{fontSize:9,fontFamily:"var(--ff-mono)",color:"var(--muted)",letterSpacing:"0.1em",marginBottom:4}}>CONDITION</div>
+                                <select value={alertFormVal.type} onChange={e=>setAlertFormVal(p=>({...p,type:e.target.value}))} style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:6,padding:"7px 10px",color:"var(--text2)",fontSize:12,fontFamily:"var(--ff-mono)"}}>
+                                  <option value="price_above">Price above</option>
+                                  <option value="price_below">Price below</option>
+                                  <option value="change_up">Daily change ≥ +%</option>
+                                  <option value="change_down">Daily change ≤ -%</option>
+                                </select>
+                              </div>
+                              <div>
+                                <div style={{fontSize:9,fontFamily:"var(--ff-mono)",color:"var(--muted)",letterSpacing:"0.1em",marginBottom:4}}>VALUE</div>
+                                <input type="number" value={alertFormVal.value} onChange={e=>setAlertFormVal(p=>({...p,value:e.target.value}))} placeholder={alertFormVal.type.startsWith("change")?"5":"150.00"} style={{width:100,background:"var(--surface)",border:"1px solid var(--border)",borderRadius:6,padding:"7px 10px",color:"var(--text2)",fontSize:12,fontFamily:"var(--ff-mono)"}}/>
+                              </div>
+                              <div style={{flex:1,minWidth:120}}>
+                                <div style={{fontSize:9,fontFamily:"var(--ff-mono)",color:"var(--muted)",letterSpacing:"0.1em",marginBottom:4}}>NOTE (optional)</div>
+                                <input value={alertFormVal.note} onChange={e=>setAlertFormVal(p=>({...p,note:e.target.value}))} placeholder="Why this level?" style={{width:"100%",background:"var(--surface)",border:"1px solid var(--border)",borderRadius:6,padding:"7px 10px",color:"var(--text2)",fontSize:12,fontFamily:"var(--ff-mono)"}}/>
+                              </div>
+                              <button onClick={()=>{if(!alertFormVal.value)return;setAlerts(p=>({...p,[w.sym]:{type:alertFormVal.type,value:parseFloat(alertFormVal.value),note:alertFormVal.note,triggered:false,triggeredAt:null}}));setAlertEditSym(null);}} style={{background:"var(--purple)18",border:"1px solid var(--purple)40",borderRadius:6,padding:"7px 16px",fontSize:10,color:"var(--purple)",fontFamily:"var(--ff-mono)",fontWeight:600,letterSpacing:"0.06em",flexShrink:0}}>SET ALERT</button>
+                              {alerts[w.sym] && <button onClick={()=>{setAlerts(p=>{const n={...p};delete n[w.sym];return n;});setAlertEditSym(null);setTriggeredAlerts(p=>p.filter(s=>s!==w.sym));}} style={{background:"#ff525212",border:"1px solid #ff525230",borderRadius:6,padding:"7px 12px",fontSize:10,color:"var(--red)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",flexShrink:0}}>REMOVE</button>}
+                            </div>
+                            {alerts[w.sym] && (
+                              <div style={{marginTop:8,fontSize:10,fontFamily:"var(--ff-mono)",color:triggeredAlerts.includes(w.sym)?"var(--amber)":"var(--purple)"}}>
+                                {triggeredAlerts.includes(w.sym)?"🔔 TRIGGERED":"◎ ACTIVE"} — {alerts[w.sym].type.replace(/_/g," ")} {alerts[w.sym].value}{alerts[w.sym].type.startsWith("change")?"%":""}
+                                {alerts[w.sym].note && <span style={{color:"var(--muted)",marginLeft:8}}>{alerts[w.sym].note}</span>}
+                              </div>
+                            )}
+                          </div>
+                        )}
 
                         {w.note && (
                           <div style={{marginTop:10,paddingTop:10,borderTop:"1px solid var(--border)",fontSize:12,color:"var(--muted)",fontStyle:"italic",lineHeight:1.5}}>

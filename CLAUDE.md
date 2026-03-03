@@ -121,5 +121,13 @@ docker-compose down && docker-compose up --build --force-recreate
 - Branch naming: `feature/short-description`
 - Push branch and raise a PR for Tim to review before merging
 
-## Task Tracking
-When asked, update this section with current progress.
+## Feature Roadmap (agreed 2026-03-03)
+Implement in this order. Update status as work is completed.
+
+1. ~~**AI Portfolio Coach**~~ — ✅ DONE (PR #9) — concentration risk, sector imbalance, grade, rebalancing suggestions
+2. ~~**AI Calls / Track Record**~~ — ✅ DONE (PR #8) — logs every verdict with entry price, live return tracking, win rate stats
+3. ~~**Earnings Calendar + AI Pre/Post Brief**~~ — ✅ DONE (PR #10) — FMP earnings data, EPS surprises, AI brief button
+4. ~~**Natural Language Screener**~~ — ✅ DONE (PR #11) — "find undervalued ASX small-caps with insider buying" → AI translates to results
+5. ~~**Macro Event Calendar with Portfolio Impact**~~ — ✅ DONE (PR #12) — Fed/CPI/jobs events with bull/bear cases per holding
+6. ~~**AI Trade Journal**~~ — ✅ DONE (PR #13) — log buy/sell entries, AI identifies behavioural patterns over time
+7. ~~**Watchlist Price Alerts + AI Trigger Conditions**~~ — ✅ DONE (PR #14) — price above/below and daily change % alerts with 60s polling
