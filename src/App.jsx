@@ -502,6 +502,125 @@ function AllocationPanel({ holdings, livePrices, audUsd, displayCcy }) {
   );
 }
 
+// ── Dividend Panel ──────────────────────────────────────────────────────────
+function DividendPanel({ holdings, livePrices, audUsd, displayCcy }) {
+  const [divData,  setDivData]  = useState({});
+  const [loading,  setLoading]  = useState(false);
+  const [expanded, setExpanded] = useState(true);
+
+  const stockSymKey = holdings.filter(h => h.priceType === "stock").map(h => h.sym).join(",");
+
+  useEffect(() => {
+    if (!stockSymKey) return;
+    setLoading(true);
+    fetch("/api/portfolio/dividends", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ symbols: stockSymKey.split(",") }),
+    })
+      .then(r => r.json()).then(d => setDivData(d)).catch(() => {})
+      .finally(() => setLoading(false));
+  }, [stockSymKey]);
+
+  if (!stockSymKey) return null;
+
+  const fmtDate = iso => {
+    if (!iso) return "—";
+    try { return new Date(iso + "T00:00:00").toLocaleDateString("en-AU", { day:"numeric", month:"short", year:"2-digit" }); }
+    catch { return iso; }
+  };
+
+  // Build rows: one per dividend-paying stock, normalised to USD
+  let totalIncomeUSD = 0;
+  let totalStockUSD  = 0;
+  const rows = holdings.filter(h => h.priceType === "stock").map(h => {
+    const lp       = livePrices[h.sym];
+    const priceCcy = h.priceCurrency || lp?.currency || "USD";
+    const priceUSD = lp?.price ? toDisplay(lp.price, priceCcy, "USD", audUsd) : null;
+    const avgUSD   = toDisplay(h.avg, h.avgCurrency || "USD", "USD", audUsd);
+    const valueUSD = priceUSD != null ? h.qty * priceUSD : h.qty * avgUSD;
+    totalStockUSD += valueUSD || 0;
+
+    const dd          = divData[h.sym] || {};
+    const yieldPct    = (dd.yield || 0) * 100;
+    const divPerShare = dd.annualDivPerShare || 0;
+    const incomeNative = divPerShare * h.qty;
+    const incomeUSD    = toDisplay(incomeNative, priceCcy, "USD", audUsd) || incomeNative;
+    const divUSD       = toDisplay(divPerShare, priceCcy, "USD", audUsd) || 0;
+    const yieldOnCost  = avgUSD && divUSD ? (divUSD / avgUSD) * 100 : 0;
+    totalIncomeUSD += incomeUSD || 0;
+    return { h, yieldPct, incomeUSD, yieldOnCost, exDivDate: dd.exDivDate };
+  }).filter(r => r.yieldPct > 0).sort((a, b) => b.yieldPct - a.yieldPct);
+
+  const portfolioYieldPct = totalStockUSD > 0 ? (totalIncomeUSD / totalStockUSD) * 100 : 0;
+
+  // Hide panel if data is loaded and no dividend payers found
+  if (!loading && Object.keys(divData).length > 0 && rows.length === 0) return null;
+
+  return (
+    <div style={{ background:"var(--card)", border:"1px solid var(--border)", borderRadius:14, padding:20, marginBottom:24 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom: expanded ? 16 : 0 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+          <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.12em" }}>DIVIDENDS</div>
+          {loading && <div className="shimmer-el" style={{ width:60, height:12, borderRadius:4 }}/>}
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:20 }}>
+          {!loading && rows.length > 0 && (
+            <>
+              <div style={{ textAlign:"right" }}>
+                <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em" }}>PROJECTED ANNUAL</div>
+                <div style={{ fontSize:14, fontWeight:700, color:"var(--green)", fontFamily:"var(--ff-mono)" }}>
+                  {fmtMoney(toDisplay(totalIncomeUSD, "USD", displayCcy, audUsd), displayCcy)}
+                </div>
+              </div>
+              <div style={{ textAlign:"right" }}>
+                <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em" }}>PORTFOLIO YIELD</div>
+                <div style={{ fontSize:14, fontWeight:700, color:"var(--blue)", fontFamily:"var(--ff-mono)" }}>
+                  {portfolioYieldPct.toFixed(2)}%
+                </div>
+              </div>
+            </>
+          )}
+          <button onClick={() => setExpanded(e => !e)} style={{ background:"none", border:"none", color:"var(--muted)", fontSize:14, padding:"2px 6px", cursor:"pointer" }}>
+            {expanded ? "▾" : "▸"}
+          </button>
+        </div>
+      </div>
+
+      {expanded && (
+        loading ? (
+          <div style={{ display:"grid", gap:8 }}>
+            {[1,2,3].map(i => <div key={i} className="shimmer-el" style={{ height:48 }}/>)}
+          </div>
+        ) : rows.length > 0 ? (
+          <div>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 72px 110px 72px 105px", gap:8, padding:"0 4px 8px", borderBottom:"1px solid var(--border)" }}>
+              {["HOLDING","YIELD","ANNUAL INCOME","YOC","EX-DIV DATE"].map(label => (
+                <div key={label} style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em" }}>{label}</div>
+              ))}
+            </div>
+            {rows.map(({ h, yieldPct, incomeUSD, yieldOnCost, exDivDate }) => (
+              <div key={h.sym} style={{ display:"grid", gridTemplateColumns:"1fr 72px 110px 72px 105px", gap:8, padding:"10px 4px", borderBottom:"1px solid var(--border)" }}>
+                <div>
+                  <span style={{ fontSize:13, fontWeight:600, color:"var(--text2)", fontFamily:"var(--ff-mono)" }}>{h.sym}</span>
+                  {h.name !== h.sym && <span style={{ fontSize:11, color:"var(--muted2)", marginLeft:8 }}>{h.name}</span>}
+                </div>
+                <div style={{ fontSize:13, color:"var(--green)", fontFamily:"var(--ff-mono)", fontWeight:600 }}>{yieldPct.toFixed(2)}%</div>
+                <div style={{ fontSize:13, color:"var(--text2)", fontFamily:"var(--ff-mono)" }}>
+                  {fmtMoney(toDisplay(incomeUSD, "USD", displayCcy, audUsd), displayCcy)}
+                </div>
+                <div style={{ fontSize:13, color:"var(--amber)", fontFamily:"var(--ff-mono)" }}>
+                  {yieldOnCost > 0 ? `${yieldOnCost.toFixed(2)}%` : "—"}
+                </div>
+                <div style={{ fontSize:11, color:"var(--muted2)", fontFamily:"var(--ff-mono)" }}>{fmtDate(exDivDate)}</div>
+              </div>
+            ))}
+          </div>
+        ) : null
+      )}
+    </div>
+  );
+}
+
 // ── Holding row ────────────────────────────────────────────────────────────
 function HoldingRow({ holding, livePrice, expanded, onToggle, onRemove, onViewChart, displayCcy, audUsd, portWeight }) {
   const priceCcy  = holding.priceCurrency || livePrice?.currency || "USD";
@@ -2361,6 +2480,7 @@ export default function App() {
                   <>
                     <div className="fu"><SummaryStrip holdings={allHoldings} livePrices={livePrices} displayCcy={displayCcy} audUsd={audUsd}/></div>
                     <div className="fu"><AllocationPanel holdings={allHoldings} livePrices={livePrices} audUsd={audUsd} displayCcy={displayCcy}/></div>
+                    <div className="fu"><DividendPanel holdings={allHoldings} livePrices={livePrices} audUsd={audUsd} displayCcy={displayCcy}/></div>
                     <div className="fu2">
                       <div className="section-label">ALL HOLDINGS</div>
                       <div style={{display:"grid",gap:8}}>

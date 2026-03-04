@@ -904,6 +904,58 @@ app.post("/api/earnings", async (req, res) => {
   res.json(out);
 });
 
+// ── Portfolio Dividends ────────────────────────────────────────────────────
+let dividendCache = {};  // keyed by sym, { data, ts }
+
+app.post("/api/portfolio/dividends", async (req, res) => {
+  if (!FMP_API_KEY) return res.json({});
+  const { symbols } = req.body;
+  if (!symbols?.length) return res.json({});
+  const base = "https://financialmodelingprep.com/stable";
+  const key  = `apikey=${FMP_API_KEY}`;
+  const now  = Date.now();
+  const TTL  = 24 * 60 * 60 * 1000; // 24h — dividends change rarely
+
+  // Skip crypto symbols
+  const stockSyms = symbols.filter(s => !COINGECKO_IDS[s.toUpperCase()]);
+  const toFetch   = stockSyms.filter(s => !dividendCache[s] || now - dividendCache[s].ts > TTL);
+
+  if (toFetch.length) {
+    // Process in chunks of 5 to stay within FMP free tier rate limits
+    const chunks = [];
+    for (let i = 0; i < toFetch.length; i += 5) chunks.push(toFetch.slice(i, i + 5));
+    for (const chunk of chunks) {
+      await Promise.allSettled(
+        chunk.map(async sym => {
+          try {
+            const [kmData, divData] = await Promise.all([
+              fetch(`${base}/key-metrics?symbol=${sym}&period=TTM&limit=1&${key}`).then(r => r.json()),
+              fetch(`${base}/historical-dividends?symbol=${sym}&limit=4&${key}`).then(r => r.json()),
+            ]);
+            const km      = Array.isArray(kmData) ? kmData[0] : null;
+            const lastDiv = divData?.historical?.[0] || null;
+            dividendCache[sym] = {
+              data: {
+                yield:             km?.dividendYield    || 0,
+                annualDivPerShare: km?.dividendPerShare || 0,
+                exDivDate:         lastDiv?.date        || null,
+                paymentDate:       lastDiv?.paymentDate || null,
+              },
+              ts: now,
+            };
+          } catch (e) {
+            dividendCache[sym] = { data: { yield: 0, annualDivPerShare: 0, exDivDate: null, paymentDate: null }, ts: now };
+          }
+        })
+      );
+    }
+  }
+
+  const out = {};
+  stockSyms.forEach(s => { if (dividendCache[s]?.data) out[s] = dividendCache[s].data; });
+  res.json(out);
+});
+
 // ── Portfolio Coach ────────────────────────────────────────────────────────
 app.post("/api/portfolio/coach", async (req, res) => {
   const { snapshot } = req.body;
