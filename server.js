@@ -760,6 +760,35 @@ app.post("/api/glossary/extract", async (req, res) => {
 });
 
 
+// ── Natural Language Screener ──────────────────────────────────────────────
+app.post("/api/screener", async (req, res) => {
+  const { query } = req.body;
+  if (!query) return res.status(400).json({ error: "query required" });
+  const today = new Date().toLocaleDateString("en-AU", { year:"numeric", month:"long", day:"numeric" });
+  try {
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type":"application/json", "x-api-key":ANTHROPIC_API_KEY, "anthropic-version":"2023-06-01" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514", max_tokens: 2500,
+        system: `You are a senior investment analyst running a stock screener. Today is ${today}. The user has described what they are looking for in plain English. Return 5–7 stocks that best match their criteria as of today. Be specific and current — pick stocks that genuinely fit right now, not generic examples. ASX tickers must end in .AX. Return ONLY a valid JSON array (no markdown):
+[{"sym":"TICKER","name":"Full Company Name","sector":"Sector","verdict":"BUY|WATCH|AVOID|HOLD","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","priceStatic":0.00,"target":"$X","upside":"+X%","up":true,"priceType":"stock or crypto","priceCurrency":"USD or AUD","avgCurrency":"USD or AUD","matchReason":"1-2 sentences on exactly why this matches the screen criteria","summary":"2-3 sentences on the investment thesis","macro":"2-3 sentences","fundamental":"2-3 sentences","technical":"2-3 sentences","sentiment":"2-3 sentences","insider":"2-3 sentences","portfolio":"1-2 sentences"}]`,
+        messages: [{ role:"user", content: `Screen for: ${query}` }],
+      }),
+    });
+    const d = await response.json();
+    const text = d.content?.find(b => b.type === "text")?.text || "";
+    const start = text.indexOf("["), end = text.lastIndexOf("]");
+    if (start === -1 || end === -1) throw new Error("No JSON array in response");
+    const parsed = JSON.parse(text.slice(start, end + 1));
+    if (!Array.isArray(parsed)) throw new Error("Invalid response");
+    res.json(parsed);
+  } catch (err) {
+    console.error("Screener error:", err.message);
+    res.status(500).json({ error: "Screener failed: " + err.message });
+  }
+});
+
 // ── Earnings Calendar ──────────────────────────────────────────────────────
 let earningsCache = {};  // keyed by sym, { data, ts }
 
