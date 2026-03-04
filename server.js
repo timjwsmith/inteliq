@@ -721,6 +721,15 @@ Rules: ASX tickers must end in .AX. Use standard crypto symbols (BTC, ETH, SOL e
     if (start === -1 || end === -1) throw new Error("No JSON array found in response");
     const parsed = JSON.parse(text.slice(start, end + 1));
     if (!Array.isArray(parsed) || parsed.length === 0) throw new Error("Invalid response format");
+    // Fetch live prices and replace Claude's priceStatic estimates
+    await Promise.allSettled(parsed.map(async pick => {
+      try {
+        const result = pick.priceType === "crypto"
+          ? await fetchCryptoPrice(pick.sym)
+          : await fetchStockPrice(pick.sym);
+        if (result?.price) pick.priceStatic = result.price;
+      } catch {}
+    }));
     dashCache = { picks: parsed, ts: now };
     console.log(`Dashboard: generated ${parsed.length} picks`);
     res.json(parsed);
@@ -840,14 +849,20 @@ app.post("/api/screener", async (req, res) => {
       method: "POST",
       headers: { "Content-Type":"application/json", "x-api-key":ANTHROPIC_API_KEY, "anthropic-version":"2023-06-01" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514", max_tokens: 2500,
-        system: `You are a senior investment analyst running a stock screener. Today is ${today}. The user has described what they are looking for in plain English. Return 5–7 stocks that best match their criteria as of today. Be specific and current — pick stocks that genuinely fit right now, not generic examples. ASX tickers must end in .AX. Return ONLY a valid JSON array (no markdown):
-[{"sym":"TICKER","name":"Full Company Name","sector":"Sector","verdict":"BUY|WATCH|AVOID|HOLD","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","priceStatic":0.00,"target":"$X","upside":"+X%","up":true,"priceType":"stock or crypto","priceCurrency":"USD or AUD","avgCurrency":"USD or AUD","matchReason":"1-2 sentences on exactly why this matches the screen criteria","summary":"2-3 sentences on the investment thesis","macro":"2-3 sentences","fundamental":"2-3 sentences","technical":"2-3 sentences","sentiment":"2-3 sentences","insider":"2-3 sentences","portfolio":"1-2 sentences"}]`,
-        messages: [{ role:"user", content: `Screen for: ${query}` }],
+        model: "claude-sonnet-4-20250514", max_tokens: 2000,
+        system: `You are a senior investment analyst running a stock screener. Today is ${today}. The user has described what they are looking for in plain English. Return 5–7 stocks that best match their criteria as of today. Be specific and current — pick stocks that genuinely fit right now, not generic examples. ASX tickers must end in .AX. Return ONLY a valid JSON array with no markdown, no preamble, no explanation — just the raw JSON array:
+[{"sym":"TICKER","name":"Full Company Name","sector":"Sector","verdict":"BUY|WATCH|AVOID|HOLD","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","priceStatic":0.00,"target":"$X","upside":"+X%","up":true,"priceType":"stock or crypto","priceCurrency":"USD or AUD","avgCurrency":"USD or AUD","matchReason":"2-3 sentences on exactly why this matches the screen criteria","summary":"2-3 sentences on the investment thesis"}]`,
+        messages: [
+          { role:"user", content: `Screen for: ${query}` },
+          { role:"assistant", content: "[" },
+        ],
       }),
     });
     const d = await response.json();
-    const text = d.content?.find(b => b.type === "text")?.text || "";
+    if (d.error) console.error("Screener API error:", JSON.stringify(d.error));
+    const raw = d.content?.find(b => b.type === "text")?.text || "";
+    // Prepend the prefilled "[" that we seeded in the assistant message
+    const text = "[" + raw;
     const start = text.indexOf("["), end = text.lastIndexOf("]");
     if (start === -1 || end === -1) throw new Error("No JSON array in response");
     const parsed = JSON.parse(text.slice(start, end + 1));
@@ -870,12 +885,12 @@ app.post("/api/earnings", async (req, res) => {
   const key  = `apikey=${FMP_API_KEY}`;
   const now  = Date.now();
   const TTL  = 6 * 60 * 60 * 1000; // 6h cache per symbol
-  const stockSyms = symbols.filter(s => !COINGECKO_IDS[s.toUpperCase()]);
+  const stockSyms = symbols.map(s => s.sym || s).filter(s => !COINGECKO_IDS[s.toUpperCase()]);
   const toFetch   = stockSyms.filter(s => !earningsCache[s] || now - earningsCache[s].ts > TTL);
 
   if (toFetch.length) {
     const results = await Promise.allSettled(
-      toFetch.map(sym => fetch(`${base}/earnings?symbol=${sym}&limit=8&${key}`).then(r => r.json()))
+      toFetch.map(sym => fetch(`${base}/earnings?symbol=${sym}&limit=5&${key}`).then(r => r.json()))
     );
     results.forEach((r, i) => {
       if (r.status === "fulfilled" && Array.isArray(r.value)) {

@@ -241,7 +241,7 @@ function linkifyText(text, onTermClick, glossary) {
   const gl = glossary || GLOSSARY;
   const sorted = [...gl].sort((a, b) => b.term.length - a.term.length);
   const escaped = sorted.map(g => g.term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  const regex = new RegExp(`(${escaped.join("|")})`, "gi");
+  const regex = new RegExp(`\\b(${escaped.join("|")})\\b`, "gi");
   const parts = text.split(regex);
   return parts.map((part, i) => {
     const match = gl.find(g => g.term.toLowerCase() === part.toLowerCase());
@@ -691,7 +691,7 @@ function IpoCard({ ipo, onAnalyse }) {
 }
 
 // ── Call Card ──────────────────────────────────────────────────────────────
-function CallCard({ record, currentPriceData, onAnalyse, priceFetching }) {
+function CallCard({ record, currentPriceData, onAnalyse, onRemove, priceFetching }) {
   const verdictAccent = { BUY:"var(--green)", WATCH:"var(--amber)", AVOID:"var(--red)", HOLD:"var(--muted2)", SELL:"var(--red)" };
   const accent = verdictAccent[record.verdict] || "var(--muted2)";
   const sourceColor = record.source === "explorer" ? "var(--blue)" : "var(--purple)";
@@ -746,13 +746,19 @@ function CallCard({ record, currentPriceData, onAnalyse, priceFetching }) {
             </div>
             <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" }}>
               <span style={{ fontSize:12, color:"var(--muted2)" }}>{record.name}</span>
-              <span style={{ fontSize:10, color:"var(--muted)", fontFamily:"var(--ff-mono)" }}>{ageSince(record.calledAt)}</span>
               {record.target && <span style={{ fontSize:10, color:"var(--muted)", fontFamily:"var(--ff-mono)" }}>tgt {record.target}</span>}
             </div>
           </div>
         </div>
         {/* Right */}
         <div style={{ display:"flex", gap:20, alignItems:"center", flexShrink:0, flexWrap:"wrap" }}>
+          <div style={{ textAlign:"right" }}>
+            <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:3 }}>CALLED</div>
+            <div style={{ fontFamily:"var(--ff-mono)", fontSize:14, fontWeight:500, color:"var(--text2)" }}>{ageSince(record.calledAt)}</div>
+            <div style={{ fontFamily:"var(--ff-mono)", fontSize:10, color:"var(--muted)", marginTop:2 }}>
+              {new Date(record.calledAt).toLocaleDateString("en-AU", { day:"numeric", month:"short", year:"numeric" })}
+            </div>
+          </div>
           <div style={{ textAlign:"right" }}>
             <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:3 }}>CALLED AT</div>
             <div style={{ fontFamily:"var(--ff-mono)", fontSize:14, fontWeight:500, color:"var(--text2)" }}>{fmtP(priceAtCall)}</div>
@@ -779,6 +785,9 @@ function CallCard({ record, currentPriceData, onAnalyse, priceFetching }) {
           </div>
           <button onClick={() => onAnalyse(record.sym)} style={{ background:"none", border:"1px solid var(--border)", borderRadius:8, padding:"7px 14px", fontSize:10, color:"var(--muted2)", fontFamily:"var(--ff-mono)", letterSpacing:"0.06em", whiteSpace:"nowrap" }}>
             ANALYSE →
+          </button>
+          <button onClick={() => onRemove(record.sym)} title="Remove this call record" style={{ background:"none", border:"1px solid var(--border)", borderRadius:8, padding:"7px 10px", fontSize:12, color:"var(--muted)", fontFamily:"var(--ff-mono)", lineHeight:1 }}>
+            ✕
           </button>
         </div>
       </div>
@@ -1305,6 +1314,14 @@ export default function App() {
   const [ipoFilter,  setIpoFilter]  = useState("ALL");
   const [ipoError,   setIpoError]   = useState(null);
 
+  // Watchlist Alerts
+  const [alerts,         setAlerts]         = useState(() => {
+    try { return JSON.parse(localStorage.getItem("inteliq_alerts") || "{}"); } catch { return {}; }
+  });  // keyed by sym: { type, value, note, triggered, triggeredAt }
+  const [triggeredAlerts,setTriggeredAlerts]= useState([]);  // sym list for in-session notifications
+  const [alertEditSym,   setAlertEditSym]   = useState(null); // sym currently being edited
+  const [alertFormVal,   setAlertFormVal]   = useState({ type:"price_above", value:"", note:"" });
+
   // Trade Journal
   const [journalEntries,  setJournalEntries]  = useState(() => {
     try { return JSON.parse(localStorage.getItem("inteliq_journal") || "[]"); } catch { return []; }
@@ -1404,6 +1421,8 @@ export default function App() {
   useEffect(() => { try { localStorage.setItem("inteliq_calls", JSON.stringify(callRecords)); } catch {} }, [callRecords]);
   // Persist journal
   useEffect(() => { try { localStorage.setItem("inteliq_journal", JSON.stringify(journalEntries)); } catch {} }, [journalEntries]);
+  // Persist alerts
+  useEffect(() => { try { localStorage.setItem("inteliq_alerts", JSON.stringify(alerts)); } catch {} }, [alerts]);
 
   // Fetch FX rate on mount
   useEffect(() => {
@@ -1509,10 +1528,49 @@ export default function App() {
       .finally(() => setCallsPriceFetching(false));
   }, [tab]);
 
+  const allHoldings = [...cbHoldings,...csHoldings,...cmcHoldings];
+
   useEffect(() => {
     if (tab !== "coach" || allHoldings.length === 0) return;
     if (!coachReport && !coachLoading) runCoachAnalysis();
   }, [tab, allHoldings.length]);
+
+  // Poll prices for active alerts every 60s
+  useEffect(() => {
+    const activeAlerts = Object.entries(alerts).filter(([,a]) => a.value && !a.triggered);
+    if (!activeAlerts.length) return;
+    function checkAlerts(prices) {
+      setTriggeredAlerts(prev => {
+        const newTriggers = [...prev];
+        const updatedAlerts = { ...alerts };
+        let changed = false;
+        activeAlerts.forEach(([sym, alert]) => {
+          const price = prices[sym]?.price;
+          if (price == null) return;
+          let hit = false;
+          if (alert.type === "price_above"  && price >= parseFloat(alert.value)) hit = true;
+          if (alert.type === "price_below"  && price <= parseFloat(alert.value)) hit = true;
+          if (alert.type === "change_up"    && (prices[sym]?.change || 0) >= parseFloat(alert.value)) hit = true;
+          if (alert.type === "change_down"  && (prices[sym]?.change || 0) <= -Math.abs(parseFloat(alert.value))) hit = true;
+          if (hit && !updatedAlerts[sym].triggered) {
+            updatedAlerts[sym] = { ...updatedAlerts[sym], triggered: true, triggeredAt: new Date().toISOString() };
+            if (!newTriggers.includes(sym)) newTriggers.push(sym);
+            changed = true;
+          }
+        });
+        if (changed) setAlerts(updatedAlerts);
+        return newTriggers;
+      });
+    }
+    const syms = activeAlerts.map(([sym]) => ({ sym, type: watchlist.find(w=>w.sym===sym)?.priceType || "stock" }));
+    fetch("/api/prices", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ symbols: syms }) })
+      .then(r => r.json()).then(checkAlerts).catch(() => {});
+    const interval = setInterval(() => {
+      fetch("/api/prices", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ symbols: syms }) })
+        .then(r => r.json()).then(checkAlerts).catch(() => {});
+    }, 60000);
+    return () => clearInterval(interval);
+  }, [alerts, watchlist]);
 
   useEffect(() => {
     if (tab !== "macro") return;
@@ -1587,8 +1645,6 @@ export default function App() {
     } catch {}
     setDetailAnalysing(false);
   }
-
-  const allHoldings = [...cbHoldings,...csHoldings,...cmcHoldings];
 
   async function handleSearch(overrideQ) {
     const q = (overrideQ || searchQ).trim();
@@ -1774,10 +1830,9 @@ export default function App() {
   }
 
   function recordCall(parsed, source) {
-    const SIX_HOURS = 6 * 60 * 60 * 1000;
     setCallRecords(prev => {
-      const recent = prev.find(c => c.sym === parsed.sym && (Date.now() - new Date(c.calledAt).getTime()) < SIX_HOURS);
-      if (recent) return prev;
+      // Never overwrite an existing record — preserve the original call date and entry price
+      if (prev.find(c => c.sym === parsed.sym)) return prev;
       const record = {
         id: `${parsed.sym}-${Date.now()}`,
         sym: parsed.sym,           name: parsed.name || parsed.sym,
@@ -2391,11 +2446,47 @@ export default function App() {
                             <button onClick={()=>openDetail({sym:w.sym,name:w.name,priceType:w.priceType,priceCurrency:w.priceCurrency,sector:w.sector})} style={{background:"none",border:"1px solid var(--border)",borderRadius:8,padding:"7px 14px",color:"var(--muted2)",fontSize:11,fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",flexShrink:0}}>
                               CHART
                             </button>
+                            <button onClick={()=>{setAlertEditSym(p=>p===w.sym?null:w.sym);const ex=alerts[w.sym];setAlertFormVal(ex?{type:ex.type,value:ex.value,note:ex.note||""}:{type:"price_above",value:"",note:""}); }} style={{background:alerts[w.sym]?`${triggeredAlerts.includes(w.sym)?"var(--amber)":"var(--purple)"}18`:"none",border:`1px solid ${alerts[w.sym]?(triggeredAlerts.includes(w.sym)?"var(--amber)40":"var(--purple)40"):"var(--border)"}`,borderRadius:8,padding:"7px 14px",color:alerts[w.sym]?(triggeredAlerts.includes(w.sym)?"var(--amber)":"var(--purple)"):"var(--muted2)",fontSize:11,fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",flexShrink:0}}>
+                              {triggeredAlerts.includes(w.sym)?"🔔 ALERT":alerts[w.sym]?"◎ ALERT":"+ ALERT"}
+                            </button>
                             <button onClick={()=>setWatchlist(prev=>prev.filter(x=>x.sym!==w.sym))} style={{background:"#ff525218",border:"1px solid #ff525240",borderRadius:8,padding:"7px 14px",color:"var(--red)",fontSize:11,fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",flexShrink:0}}>
                               REMOVE
                             </button>
                           </div>
                         </div>
+
+                        {/* Alert form */}
+                        {alertEditSym===w.sym && (
+                          <div style={{marginTop:12,paddingTop:12,borderTop:"1px solid var(--border)"}}>
+                            <div style={{display:"flex",gap:8,alignItems:"flex-end",flexWrap:"wrap"}}>
+                              <div>
+                                <div style={{fontSize:9,fontFamily:"var(--ff-mono)",color:"var(--muted)",letterSpacing:"0.1em",marginBottom:4}}>CONDITION</div>
+                                <select value={alertFormVal.type} onChange={e=>setAlertFormVal(p=>({...p,type:e.target.value}))} style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:6,padding:"7px 10px",color:"var(--text2)",fontSize:12,fontFamily:"var(--ff-mono)"}}>
+                                  <option value="price_above">Price above</option>
+                                  <option value="price_below">Price below</option>
+                                  <option value="change_up">Daily change ≥ +%</option>
+                                  <option value="change_down">Daily change ≤ -%</option>
+                                </select>
+                              </div>
+                              <div>
+                                <div style={{fontSize:9,fontFamily:"var(--ff-mono)",color:"var(--muted)",letterSpacing:"0.1em",marginBottom:4}}>VALUE</div>
+                                <input type="number" value={alertFormVal.value} onChange={e=>setAlertFormVal(p=>({...p,value:e.target.value}))} placeholder={alertFormVal.type.startsWith("change")?"5":"150.00"} style={{width:100,background:"var(--surface)",border:"1px solid var(--border)",borderRadius:6,padding:"7px 10px",color:"var(--text2)",fontSize:12,fontFamily:"var(--ff-mono)"}}/>
+                              </div>
+                              <div style={{flex:1,minWidth:120}}>
+                                <div style={{fontSize:9,fontFamily:"var(--ff-mono)",color:"var(--muted)",letterSpacing:"0.1em",marginBottom:4}}>NOTE (optional)</div>
+                                <input value={alertFormVal.note} onChange={e=>setAlertFormVal(p=>({...p,note:e.target.value}))} placeholder="Why this level?" style={{width:"100%",background:"var(--surface)",border:"1px solid var(--border)",borderRadius:6,padding:"7px 10px",color:"var(--text2)",fontSize:12,fontFamily:"var(--ff-mono)"}}/>
+                              </div>
+                              <button onClick={()=>{if(!alertFormVal.value)return;setAlerts(p=>({...p,[w.sym]:{type:alertFormVal.type,value:parseFloat(alertFormVal.value),note:alertFormVal.note,triggered:false,triggeredAt:null}}));setAlertEditSym(null);}} style={{background:"var(--purple)18",border:"1px solid var(--purple)40",borderRadius:6,padding:"7px 16px",fontSize:10,color:"var(--purple)",fontFamily:"var(--ff-mono)",fontWeight:600,letterSpacing:"0.06em",flexShrink:0}}>SET ALERT</button>
+                              {alerts[w.sym] && <button onClick={()=>{setAlerts(p=>{const n={...p};delete n[w.sym];return n;});setAlertEditSym(null);setTriggeredAlerts(p=>p.filter(s=>s!==w.sym));}} style={{background:"#ff525212",border:"1px solid #ff525230",borderRadius:6,padding:"7px 12px",fontSize:10,color:"var(--red)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",flexShrink:0}}>REMOVE</button>}
+                            </div>
+                            {alerts[w.sym] && (
+                              <div style={{marginTop:8,fontSize:10,fontFamily:"var(--ff-mono)",color:triggeredAlerts.includes(w.sym)?"var(--amber)":"var(--purple)"}}>
+                                {triggeredAlerts.includes(w.sym)?"🔔 TRIGGERED":"◎ ACTIVE"} — {alerts[w.sym].type.replace(/_/g," ")} {alerts[w.sym].value}{alerts[w.sym].type.startsWith("change")?"%":""}
+                                {alerts[w.sym].note && <span style={{color:"var(--muted)",marginLeft:8}}>{alerts[w.sym].note}</span>}
+                              </div>
+                            )}
+                          </div>
+                        )}
 
                         {w.note && (
                           <div style={{marginTop:10,paddingTop:10,borderTop:"1px solid var(--border)",fontSize:12,color:"var(--muted)",fontStyle:"italic",lineHeight:1.5}}>
@@ -2751,7 +2842,7 @@ export default function App() {
                 return (
                   <div className="fu2">
                     {filtered.map((ipo,i) => (
-                      <IpoCard key={`${ipo.symbol}-${ipo.date}-${i}`} ipo={ipo} onAnalyse={sym=>{setTab("explorer");handleSearch(sym);}}/>
+                      <IpoCard key={`${ipo.symbol}-${ipo.date}-${i}`} ipo={ipo} onAnalyse={sym=>openDetail({sym,name:ipo.name,priceType:"stock",priceCurrency:"USD"})}/>
                     ))}
                   </div>
                 );
@@ -2766,7 +2857,7 @@ export default function App() {
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap"}}>
                   <div>
                     <h1 style={{fontFamily:"var(--ff-head)",fontSize:26,fontWeight:800,color:"var(--text2)",marginBottom:6}}>AI Track Record</h1>
-                    <p style={{fontSize:13,color:"var(--muted2)"}}>Every verdict the AI has made — with live return tracking.</p>
+                    <p style={{fontSize:13,color:"var(--muted2)"}}>Every verdict the AI has made — with live return tracking. CALLED date shows when the recommendation was first made.</p>
                   </div>
                   {callRecords.length > 0 && (
                     <button onClick={()=>{ if(window.confirm("Clear all call records? This cannot be undone.")) setCallRecords([]); }} style={{background:"#ff525218",border:"1px solid #ff525240",borderRadius:8,padding:"7px 16px",fontSize:10,color:"var(--red)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em"}}>
@@ -2867,6 +2958,7 @@ export default function App() {
                             currentPriceData={callsPrices[c.sym]}
                             priceFetching={callsPriceFetching}
                             onAnalyse={sym => { setTab("explorer"); handleSearch(sym); }}
+                            onRemove={sym => setCallRecords(prev => prev.filter(x => x.sym !== sym))}
                           />
                         ))}
                       </div>
