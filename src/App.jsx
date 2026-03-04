@@ -2834,7 +2834,7 @@ export default function App() {
                 return (
                   <div className="fu2">
                     {filtered.map((ipo,i) => (
-                      <IpoCard key={`${ipo.symbol}-${ipo.date}-${i}`} ipo={ipo} onAnalyse={sym=>{setTab("explorer");handleSearch(sym);}}/>
+                      <IpoCard key={`${ipo.symbol}-${ipo.date}-${i}`} ipo={ipo} onAnalyse={sym=>openDetail({sym,name:ipo.name,priceType:"stock",priceCurrency:"USD"})}/>
                     ))}
                   </div>
                 );
