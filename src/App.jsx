@@ -308,6 +308,8 @@ function SummaryStrip({ holdings, livePrices, displayCcy, audUsd }) {
   let totalValueUSD = 0, totalCostUSD = 0;
   let cryptoValueUSD = 0, cryptoCostUSD = 0;
   let stocksValueUSD = 0, stocksCostUSD = 0;
+  let todayPnlUSD = 0;
+  let best = null, worst = null;
 
   for (const h of holdings) {
     const lp = livePrices[h.sym];
@@ -320,31 +322,55 @@ function SummaryStrip({ holdings, livePrices, displayCcy, audUsd }) {
     totalValueUSD += valueUSD; totalCostUSD += costUSD;
     if (h.priceType === "crypto") { cryptoValueUSD += valueUSD; cryptoCostUSD += costUSD; }
     else                          { stocksValueUSD += valueUSD; stocksCostUSD += costUSD; }
+    // Today's P&L: qty × price × (change% / 100)
+    if (priceUSD != null && lp?.change != null) {
+      todayPnlUSD += h.qty * priceUSD * (lp.change / 100);
+    }
+    // Best / worst by unrealised %
+    if (priceUSD != null && avgUSD) {
+      const pnlPct = ((priceUSD - avgUSD) / avgUSD) * 100;
+      if (best  == null || pnlPct > best.pct)  best  = { sym: h.sym, pct: pnlPct };
+      if (worst == null || pnlPct < worst.pct) worst = { sym: h.sym, pct: pnlPct };
+    }
   }
 
-  const totalPnl  = totalCostUSD  > 0 ? ((totalValueUSD  - totalCostUSD)  / totalCostUSD)  * 100 : 0;
-  const cryptoPnl = cryptoCostUSD > 0 ? ((cryptoValueUSD - cryptoCostUSD) / cryptoCostUSD) * 100 : null;
-  const stocksPnl = stocksCostUSD > 0 ? ((stocksValueUSD - stocksCostUSD) / stocksCostUSD) * 100 : null;
-  const totalValue  = toDisplay(totalValueUSD,              "USD", displayCcy, audUsd);
-  const pnlAbsolute = toDisplay(totalValueUSD - totalCostUSD, "USD", displayCcy, audUsd);
+  const totalPnl    = totalCostUSD  > 0 ? ((totalValueUSD  - totalCostUSD)  / totalCostUSD)  * 100 : 0;
+  const cryptoPnl   = cryptoCostUSD > 0 ? ((cryptoValueUSD - cryptoCostUSD) / cryptoCostUSD) * 100 : null;
+  const stocksPnl   = stocksCostUSD > 0 ? ((stocksValueUSD - stocksCostUSD) / stocksCostUSD) * 100 : null;
+  const totalValue    = toDisplay(totalValueUSD,               "USD", displayCcy, audUsd);
+  const totalInvested = toDisplay(totalCostUSD,                "USD", displayCcy, audUsd);
+  const pnlAbsolute   = toDisplay(totalValueUSD - totalCostUSD,"USD", displayCcy, audUsd);
+  const todayDisp     = toDisplay(Math.abs(todayPnlUSD),       "USD", displayCcy, audUsd);
 
-  const items = [
-    { l:"TOTAL VALUE", v:fmtMoney(totalValue, displayCcy),                                             c:"var(--text2)",  sub:null },
-    { l:"TOTAL P&L",   v:`${totalPnl>=0?"+":""}${totalPnl.toFixed(1)}%`,                              c:totalPnl>=0?"var(--green)":"var(--red)", sub:fmtMoney(Math.abs(pnlAbsolute), displayCcy) },
-    { l:"CRYPTO P&L",  v:cryptoPnl!=null?`${cryptoPnl>=0?"+":""}${cryptoPnl.toFixed(1)}%`:"—",       c:cryptoPnl==null?"var(--muted)":cryptoPnl>=0?"var(--green)":"var(--red)", sub:null },
-    { l:"STOCKS P&L",  v:stocksPnl!=null?`${stocksPnl>=0?"+":""}${stocksPnl.toFixed(1)}%`:"—",       c:stocksPnl==null?"var(--muted)":stocksPnl>=0?"var(--green)":"var(--red)", sub:null },
-    { l:"POSITIONS",   v:`${holdings.length}`,                                                         c:"var(--text2)",  sub:null },
+  const row1 = [
+    { l:"TOTAL VALUE",    v:fmtMoney(totalValue, displayCcy),                                    c:"var(--text2)",  sub:`invested ${fmtMoney(totalInvested, displayCcy)}` },
+    { l:"TOTAL P&L",      v:`${totalPnl>=0?"+":""}${totalPnl.toFixed(1)}%`,                      c:totalPnl>=0?"var(--green)":"var(--red)", sub:fmtMoney(Math.abs(pnlAbsolute), displayCcy) },
+    { l:"TODAY'S P&L",    v:todayPnlUSD!==0?`${todayPnlUSD>=0?"+":"−"}${fmtMoney(todayDisp,displayCcy)}`:"—", c:todayPnlUSD>=0?"var(--green)":"var(--red)", sub:null },
+    { l:"BEST",           v:best  ? `${best.sym}`  :"—", c:"var(--green)", sub:best  ? `${best.pct>=0?"+":""}${best.pct.toFixed(1)}%`  : null },
+    { l:"WORST",          v:worst ? `${worst.sym}` :"—", c:"var(--red)",   sub:worst ? `${worst.pct>=0?"+":""}${worst.pct.toFixed(1)}%` : null },
+  ];
+  const row2 = [
+    { l:"CRYPTO P&L", v:cryptoPnl!=null?`${cryptoPnl>=0?"+":""}${cryptoPnl.toFixed(1)}%`:"—", c:cryptoPnl==null?"var(--muted)":cryptoPnl>=0?"var(--green)":"var(--red)", sub:null },
+    { l:"STOCKS P&L", v:stocksPnl!=null?`${stocksPnl>=0?"+":""}${stocksPnl.toFixed(1)}%`:"—", c:stocksPnl==null?"var(--muted)":stocksPnl>=0?"var(--green)":"var(--red)", sub:null },
+    { l:"POSITIONS",  v:`${holdings.length}`, c:"var(--text2)", sub:null },
   ];
 
+  const Card = ({ m, large }) => (
+    <div key={m.l} className="stat-card">
+      <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.12em", marginBottom:10 }}>{m.l}</div>
+      <div style={{ fontSize:large?22:18, fontFamily:"var(--ff-head)", fontWeight:800, color:m.c, lineHeight:1 }}>{m.v}</div>
+      {m.sub && <div style={{ fontSize:11, color:"var(--muted2)", marginTop:5, fontFamily:"var(--ff-mono)" }}>{m.sub}</div>}
+    </div>
+  );
+
   return (
-    <div style={{ display:"grid", gridTemplateColumns:"repeat(5,1fr)", gap:12, marginBottom:24 }}>
-      {items.map(m => (
-        <div key={m.l} className="stat-card">
-          <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.12em", marginBottom:10 }}>{m.l}</div>
-          <div style={{ fontSize:22, fontFamily:"var(--ff-head)", fontWeight:800, color:m.c, lineHeight:1 }}>{m.v}</div>
-          {m.sub && <div style={{ fontSize:11, color:"var(--muted2)", marginTop:5, fontFamily:"var(--ff-mono)" }}>{m.sub}</div>}
-        </div>
-      ))}
+    <div style={{ marginBottom:24 }}>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(5,1fr)", gap:12, marginBottom:12 }}>
+        {row1.map(m => <Card key={m.l} m={m} large />)}
+      </div>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:12 }}>
+        {row2.map(m => <Card key={m.l} m={m} />)}
+      </div>
     </div>
   );
 }
