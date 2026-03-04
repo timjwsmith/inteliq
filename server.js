@@ -136,6 +136,74 @@ app.get("/api/coinbase/balances", async (req, res) => {
   }
 });
 
+app.get('/api/coinbase/usd-balance', async (req, res) => {
+  try {
+    const path = '/api/v3/brokerage/accounts';
+    const jwt = coinbaseJWT('GET', path);
+    const r = await fetch(`https://api.coinbase.com${path}`, {
+      headers: { Authorization: `Bearer ${jwt}` }
+    });
+    const data = await r.json();
+    const accounts = data.accounts || [];
+    let available = 0;
+    let availableAUD = 0;
+    for (const acc of accounts) {
+      if (['USD', 'USDC'].includes(acc.currency)) {
+        available += parseFloat(acc.available_balance?.value || 0);
+      }
+      if (acc.currency === 'AUD') {
+        availableAUD += parseFloat(acc.available_balance?.value || 0);
+      }
+    }
+    res.json({ available, availableAUD });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/coinbase/order', async (req, res) => {
+  const { productId, side, orderType, quoteSize, baseSize, limitPrice } = req.body;
+  try {
+    const path = '/api/v3/brokerage/orders';
+    const jwt = coinbaseJWT('POST', path);
+
+    let order_configuration;
+    if (orderType === 'market') {
+      order_configuration = {
+        market_market_ioc: side === 'BUY'
+          ? { quote_size: String(quoteSize) }
+          : { base_size: String(baseSize) }
+      };
+    } else {
+      order_configuration = {
+        limit_limit_gtc: {
+          base_size: String(baseSize),
+          limit_price: String(limitPrice),
+          post_only: false
+        }
+      };
+    }
+
+    const body = JSON.stringify({
+      client_order_id: `inteliq-${Date.now()}`,
+      product_id: productId,
+      side,
+      order_configuration
+    });
+
+    const r = await fetch(`https://api.coinbase.com${path}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${jwt}`, 'Content-Type': 'application/json' },
+      body
+    });
+    const data = await r.json();
+    if (!r.ok) return res.status(r.status).json(data);
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── CoinSpot Read-Only API ─────────────────────────────────────────────────
 app.get("/api/coinspot/balances", async (req, res) => {
   if (!COINSPOT_API_KEY || !COINSPOT_API_SECRET) {
