@@ -381,6 +381,90 @@ const SECTOR_COLOURS = [
   "#ff9800","#9c27b0","#f06292","#26c6da","#d4e157",
 ];
 
+// ── Benchmark Strip ─────────────────────────────────────────────────────────
+function BenchmarkStrip({ holdings, livePrices, audUsd }) {
+  const [benchmarks, setBenchmarks] = useState(null);
+  const [period,     setPeriod]     = useState("1d");
+
+  useEffect(() => {
+    fetch("/api/benchmarks").then(r => r.json()).then(d => setBenchmarks(d)).catch(() => {});
+  }, []);
+
+  // Compute portfolio today's weighted % change from live prices
+  let totalVal = 0, totalChange = 0;
+  for (const h of holdings) {
+    const lp = livePrices[h.sym];
+    if (!lp?.price || lp.change == null) continue;
+    const priceCcy = h.priceCurrency || lp.currency || "USD";
+    const priceUSD = toDisplay(lp.price, priceCcy, "USD", audUsd) || 0;
+    const val = h.qty * priceUSD;
+    totalVal    += val;
+    totalChange += val * (lp.change / 100);
+  }
+  const portTodayPct = totalVal > 0 ? (totalChange / totalVal) * 100 : null;
+
+  if (!benchmarks && portTodayPct === null) return null;
+
+  const KEY = { "1d":"change1d", "1w":"change1w", "1m":"change1m", "3m":"change3m", "1y":"change1y" };
+  const PLABEL = { "1d":"Today", "1w":"1 Week", "1m":"1 Month", "3m":"3 Months", "1y":"1 Year" };
+
+  const rows = [
+    { label:"Your Portfolio", sub:"today", pct: portTodayPct,                                        color:"var(--purple)" },
+    benchmarks?.sp500  && { label:benchmarks.sp500.name,  sub:PLABEL[period].toLowerCase(), pct: benchmarks.sp500[KEY[period]]  * 100, color:"var(--blue)"  },
+    benchmarks?.asx200 && { label:benchmarks.asx200.name, sub:PLABEL[period].toLowerCase(), pct: benchmarks.asx200[KEY[period]] * 100, color:"var(--amber)" },
+  ].filter(Boolean);
+
+  const maxAbs = Math.max(...rows.map(r => Math.abs(r.pct ?? 0)), 0.01);
+
+  return (
+    <div style={{ background:"var(--card)", border:"1px solid var(--border)", borderRadius:14, padding:20, marginBottom:24 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+        <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.12em" }}>BENCHMARK COMPARISON</div>
+        <div className="pill-toggle">
+          {["1d","1w","1m","3m","1y"].map(p => (
+            <button key={p} onClick={() => setPeriod(p)} className={period === p ? "active" : ""}>
+              {p.toUpperCase()}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ display:"grid", gap:10 }}>
+        {rows.map(row => (
+          <div key={row.label} style={{ display:"grid", gridTemplateColumns:"140px 76px 1fr", gap:12, alignItems:"center" }}>
+            <div>
+              <div style={{ fontSize:12, fontWeight:600, color:"var(--text2)" }}>{row.label}</div>
+              <div style={{ fontSize:10, color:"var(--muted)", fontFamily:"var(--ff-mono)" }}>{row.sub}</div>
+            </div>
+            <div style={{ fontSize:15, fontWeight:700, fontFamily:"var(--ff-mono)", textAlign:"right",
+              color: row.pct == null ? "var(--muted)" : row.pct >= 0 ? "var(--green)" : "var(--red)" }}>
+              {row.pct != null ? (row.pct >= 0 ? "+" : "") + row.pct.toFixed(2) + "%" : "—"}
+            </div>
+            <div style={{ position:"relative", height:6, background:"var(--surface)", borderRadius:4, overflow:"hidden" }}>
+              {row.pct != null && (
+                <div style={{
+                  position:"absolute", height:"100%", borderRadius:4,
+                  background: row.pct >= 0 ? "var(--green)" : "var(--red)",
+                  width: `${Math.abs(row.pct) / maxAbs * 45}%`,
+                  left:  row.pct >= 0 ? "50%" : `${50 - Math.abs(row.pct) / maxAbs * 45}%`,
+                  transition: "all 0.4s ease",
+                }}/>
+              )}
+              <div style={{ position:"absolute", left:"50%", top:0, width:1, height:"100%", background:"var(--border2)" }}/>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {period !== "1d" && (
+        <p style={{ fontSize:10, color:"var(--muted)", marginTop:10, fontFamily:"var(--ff-mono)" }}>
+          * Portfolio shows today's return. Benchmarks show {PLABEL[period].toLowerCase()}.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function AllocationPanel({ holdings, livePrices, audUsd, displayCcy }) {
   const canvasRef = useRef(null);
 
@@ -2479,6 +2563,7 @@ export default function App() {
                 allHoldings.length>0 ? (
                   <>
                     <div className="fu"><SummaryStrip holdings={allHoldings} livePrices={livePrices} displayCcy={displayCcy} audUsd={audUsd}/></div>
+                    <div className="fu"><BenchmarkStrip holdings={allHoldings} livePrices={livePrices} audUsd={audUsd}/></div>
                     <div className="fu"><AllocationPanel holdings={allHoldings} livePrices={livePrices} audUsd={audUsd} displayCcy={displayCcy}/></div>
                     <div className="fu"><DividendPanel holdings={allHoldings} livePrices={livePrices} audUsd={audUsd} displayCcy={displayCcy}/></div>
                     <div className="fu2">
