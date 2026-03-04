@@ -1519,6 +1519,8 @@ export default function App() {
       .finally(() => setCallsPriceFetching(false));
   }, [tab]);
 
+  const allHoldings = [...cbHoldings,...csHoldings,...cmcHoldings];
+
   useEffect(() => {
     if (tab !== "coach" || allHoldings.length === 0) return;
     if (!coachReport && !coachLoading) runCoachAnalysis();
@@ -1634,8 +1636,6 @@ export default function App() {
     } catch {}
     setDetailAnalysing(false);
   }
-
-  const allHoldings = [...cbHoldings,...csHoldings,...cmcHoldings];
 
   async function handleSearch(overrideQ) {
     const q = (overrideQ || searchQ).trim();
