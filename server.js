@@ -760,6 +760,36 @@ app.post("/api/glossary/extract", async (req, res) => {
 });
 
 
+// ── Earnings Calendar ──────────────────────────────────────────────────────
+let earningsCache = {};  // keyed by sym, { data, ts }
+
+app.post("/api/earnings", async (req, res) => {
+  const { symbols } = req.body;
+  if (!symbols?.length) return res.json({});
+  if (!FMP_API_KEY) return res.json({});
+  const base = "https://financialmodelingprep.com/stable";
+  const key  = `apikey=${FMP_API_KEY}`;
+  const now  = Date.now();
+  const TTL  = 6 * 60 * 60 * 1000; // 6h cache per symbol
+  const stockSyms = symbols.filter(s => !COINGECKO_IDS[s.toUpperCase()]);
+  const toFetch   = stockSyms.filter(s => !earningsCache[s] || now - earningsCache[s].ts > TTL);
+
+  if (toFetch.length) {
+    const results = await Promise.allSettled(
+      toFetch.map(sym => fetch(`${base}/earnings?symbol=${sym}&limit=8&${key}`).then(r => r.json()))
+    );
+    results.forEach((r, i) => {
+      if (r.status === "fulfilled" && Array.isArray(r.value)) {
+        earningsCache[toFetch[i]] = { data: r.value, ts: now };
+      }
+    });
+  }
+
+  const out = {};
+  stockSyms.forEach(s => { if (earningsCache[s]?.data) out[s] = earningsCache[s].data; });
+  res.json(out);
+});
+
 // ── Portfolio Coach ────────────────────────────────────────────────────────
 app.post("/api/portfolio/coach", async (req, res) => {
   const { snapshot } = req.body;
