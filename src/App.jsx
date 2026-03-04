@@ -503,7 +503,7 @@ function AllocationPanel({ holdings, livePrices, audUsd, displayCcy }) {
 }
 
 // ── Holding row ────────────────────────────────────────────────────────────
-function HoldingRow({ holding, livePrice, expanded, onToggle, onRemove, onViewChart, displayCcy, audUsd }) {
+function HoldingRow({ holding, livePrice, expanded, onToggle, onRemove, onViewChart, displayCcy, audUsd, portWeight }) {
   const priceCcy  = holding.priceCurrency || livePrice?.currency || "USD";
   const rawPrice  = livePrice?.price || null;
   const dispPrice = rawPrice ? toDisplay(rawPrice, priceCcy, displayCcy, audUsd) : null;
@@ -524,8 +524,14 @@ function HoldingRow({ holding, livePrice, expanded, onToggle, onRemove, onViewCh
               <span style={{ fontFamily:"var(--ff-head)", fontSize:15, fontWeight:700, color:"var(--text2)" }}>{holding.sym}</span>
               <SourceBadge source={holding.source}/>
               <SectorBadge sector={holding.sector}/>
+              {portWeight != null && portWeight >= 20 && (
+                <span style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--amber)", background:"#ffab4015", border:"1px solid #ffab4040", borderRadius:4, padding:"2px 6px", letterSpacing:"0.06em" }}>⚠ CONCENTRATED</span>
+              )}
             </div>
-            <div style={{ fontSize:12, color:"var(--muted2)" }}>{holding.name}</div>
+            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+              <span style={{ fontSize:12, color:"var(--muted2)" }}>{holding.name}</span>
+              {portWeight != null && <span style={{ fontSize:10, color:"var(--muted)", fontFamily:"var(--ff-mono)" }}>{portWeight.toFixed(1)}% of portfolio</span>}
+            </div>
           </div>
         </div>
         <div style={{ display:"flex", gap:24, alignItems:"center" }}>
@@ -2358,9 +2364,24 @@ export default function App() {
                     <div className="fu2">
                       <div className="section-label">ALL HOLDINGS</div>
                       <div style={{display:"grid",gap:8}}>
-                        {allHoldings.map(h=>(
-                          <HoldingRow key={`${h.source}-${h.sym}`} holding={h} livePrice={livePrices[h.sym]} expanded={portExp===`${h.source}-${h.sym}`} onToggle={()=>setPortExp(p=>p===`${h.source}-${h.sym}`?null:`${h.source}-${h.sym}`)} onRemove={h.source==="cmc"?()=>setCmc(p=>p.filter(x=>x.sym!==h.sym)):null} onViewChart={()=>openDetail({sym:h.sym,name:h.name,priceType:h.priceType,priceCurrency:h.priceCurrency||"USD",sector:h.sector})} displayCcy={displayCcy} audUsd={audUsd}/>
-                        ))}
+                        {(() => {
+                          const totalPortUSD = allHoldings.reduce((acc, h) => {
+                            const lp = livePrices[h.sym];
+                            const priceCcy = h.priceCurrency || lp?.currency || "USD";
+                            const priceUSD = lp?.price ? toDisplay(lp.price, priceCcy, "USD", audUsd) : null;
+                            const avgUSD   = toDisplay(h.avg, h.avgCurrency || "USD", "USD", audUsd);
+                            return acc + (priceUSD != null ? h.qty * priceUSD : h.qty * avgUSD);
+                          }, 0);
+                          return allHoldings.map(h => {
+                            const lp = livePrices[h.sym];
+                            const priceCcy = h.priceCurrency || lp?.currency || "USD";
+                            const priceUSD = lp?.price ? toDisplay(lp.price, priceCcy, "USD", audUsd) : null;
+                            const avgUSD   = toDisplay(h.avg, h.avgCurrency || "USD", "USD", audUsd);
+                            const valueUSD = priceUSD != null ? h.qty * priceUSD : h.qty * avgUSD;
+                            const weight   = totalPortUSD > 0 ? (valueUSD / totalPortUSD) * 100 : null;
+                            return <HoldingRow key={`${h.source}-${h.sym}`} holding={h} livePrice={livePrices[h.sym]} expanded={portExp===`${h.source}-${h.sym}`} onToggle={()=>setPortExp(p=>p===`${h.source}-${h.sym}`?null:`${h.source}-${h.sym}`)} onRemove={h.source==="cmc"?()=>setCmc(p=>p.filter(x=>x.sym!==h.sym)):null} onViewChart={()=>openDetail({sym:h.sym,name:h.name,priceType:h.priceType,priceCurrency:h.priceCurrency||"USD",sector:h.sector})} displayCcy={displayCcy} audUsd={audUsd} portWeight={weight}/>;
+                          });
+                        })()}
                       </div>
                     </div>
                   </>
