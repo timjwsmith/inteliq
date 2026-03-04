@@ -975,7 +975,7 @@ function DividendPanel({ holdings, livePrices, audUsd, displayCcy }) {
 }
 
 // ── Holding row ────────────────────────────────────────────────────────────
-function HoldingRow({ holding, livePrice, expanded, onToggle, onRemove, onViewChart, displayCcy, audUsd, portWeight }) {
+function HoldingRow({ holding, livePrice, expanded, onToggle, onRemove, onViewChart, onTrade, displayCcy, audUsd, portWeight }) {
   const priceCcy  = holding.priceCurrency || livePrice?.currency || "USD";
   const rawPrice  = livePrice?.price || null;
   const dispPrice = rawPrice ? toDisplay(rawPrice, priceCcy, displayCcy, audUsd) : null;
@@ -1046,6 +1046,16 @@ function HoldingRow({ holding, livePrice, expanded, onToggle, onRemove, onViewCh
                 CHART
               </button>
             )}
+            {holding.source === "coinbase" && onTrade && (
+              <>
+                <button onClick={e=>{e.stopPropagation();onTrade({sym:holding.sym,name:holding.name,productId:`${holding.sym}-USD`,side:"BUY",priceType:"crypto"});}} style={{ background:"#00e67610", border:"1px solid #00e67640", borderRadius:8, padding:"7px 14px", color:"var(--green)", fontSize:11, fontFamily:"var(--ff-mono)", letterSpacing:"0.06em" }}>
+                  BUY
+                </button>
+                <button onClick={e=>{e.stopPropagation();onTrade({sym:holding.sym,name:holding.name,productId:`${holding.sym}-USD`,side:"SELL",priceType:"crypto"});}} style={{ background:"#ff525218", border:"1px solid #ff525240", borderRadius:8, padding:"7px 14px", color:"var(--red)", fontSize:11, fontFamily:"var(--ff-mono)", letterSpacing:"0.06em" }}>
+                  SELL
+                </button>
+              </>
+            )}
             {onRemove && (
               <button onClick={e=>{e.stopPropagation();onRemove();}} style={{ background:"#ff525218", border:"1px solid #ff525240", borderRadius:8, padding:"7px 14px", color:"var(--red)", fontSize:11, fontFamily:"var(--ff-mono)", letterSpacing:"0.06em" }}>
                 REMOVE
@@ -1059,7 +1069,7 @@ function HoldingRow({ holding, livePrice, expanded, onToggle, onRemove, onViewCh
 }
 
 // ── Source panel ───────────────────────────────────────────────────────────
-function SourcePanel({ label, color, holdings, livePrices, syncing, lastSync, error, onSync, onRemove, onViewChart, displayCcy, audUsd }) {
+function SourcePanel({ label, color, holdings, livePrices, syncing, lastSync, error, onSync, onRemove, onViewChart, onTrade, displayCcy, audUsd }) {
   const [portExp, setPortExp] = useState(null);
   let totalValueUSD = 0, totalCostUSD = 0;
   for (const h of holdings) {
@@ -1101,7 +1111,7 @@ function SourcePanel({ label, color, holdings, livePrices, syncing, lastSync, er
       {holdings.length > 0 ? (
         <div style={{ display:"grid", gap:8 }}>
           {holdings.map(h => (
-            <HoldingRow key={h.sym} holding={h} livePrice={livePrices[h.sym]} expanded={portExp===h.sym} onToggle={()=>setPortExp(p=>p===h.sym?null:h.sym)} onRemove={()=>onRemove(h.sym)} onViewChart={onViewChart?()=>onViewChart(h):null} displayCcy={displayCcy} audUsd={audUsd}/>
+            <HoldingRow key={h.sym} holding={h} livePrice={livePrices[h.sym]} expanded={portExp===h.sym} onToggle={()=>setPortExp(p=>p===h.sym?null:h.sym)} onRemove={()=>onRemove(h.sym)} onViewChart={onViewChart?()=>onViewChart(h):null} onTrade={onTrade} displayCcy={displayCcy} audUsd={audUsd}/>
           ))}
         </div>
       ) : !error && (
@@ -1382,7 +1392,7 @@ function CallCard({ record, currentPriceData, onAnalyse, onRemove, priceFetching
           </div>
         </div>
         {/* Right */}
-        <div style={{ display:"flex", gap:20, alignItems:"center", flexShrink:0, flexWrap:"wrap" }}>
+        <div style={{ display:"flex", gap:20, alignItems:"flex-start", flexShrink:0, flexWrap:"wrap" }}>
           <div style={{ textAlign:"right" }}>
             <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:3 }}>CALLED</div>
             <div style={{ fontFamily:"var(--ff-mono)", fontSize:14, fontWeight:500, color:"var(--text2)" }}>{ageSince(record.calledAt)}</div>
@@ -1845,6 +1855,204 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
   );
 }
 
+// ── Trade Modal ─────────────────────────────────────────────────────────────
+function TradeModal({ config, onClose, onSuccess, displayCcy }) {
+  const { sym, name } = config;
+  const tradeCcy = displayCcy === "AUD" ? "AUD" : "USD";
+  const effectiveProductId = `${sym}-${tradeCcy}`;
+  const ccySymbol = tradeCcy === "AUD" ? "A$" : "$";
+
+  const [side, setSide] = useState(config.side || "BUY");
+  const [orderType, setOrderType] = useState("market");
+  const [step, setStep] = useState(1);
+  const [availBal, setAvailBal] = useState(null);
+  const [quoteAmount, setQuoteAmount] = useState("");
+  const [cryptoQty, setCryptoQty] = useState("");
+  const [limitPrice, setLimitPrice] = useState("");
+  const [livePrice, setLivePrice] = useState(null);
+  const [result, setResult] = useState(null);
+  const [placing, setPlacing] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/coinbase/usd-balance")
+      .then(r => r.json())
+      .then(d => setAvailBal(tradeCcy === "AUD" ? (d.availableAUD ?? null) : (d.available ?? null)))
+      .catch(() => setAvailBal(null));
+    fetch(`/api/chart?sym=${sym}&range=1d&type=crypto`)
+      .then(r => r.json())
+      .then(d => { if (d.currentPrice) setLivePrice(d.currentPrice); })
+      .catch(() => {});
+  }, [sym, tradeCcy]);
+
+  const estQty = side === "BUY" && orderType === "market" && livePrice && parseFloat(quoteAmount) > 0
+    ? (parseFloat(quoteAmount) / livePrice).toFixed(6) : null;
+
+  const canReview = orderType === "market"
+    ? (side === "BUY" ? !!parseFloat(quoteAmount) : !!parseFloat(cryptoQty))
+    : (!!parseFloat(cryptoQty) && !!parseFloat(limitPrice));
+
+  async function placeOrder() {
+    setPlacing(true);
+    try {
+      const body = { productId: effectiveProductId, side, orderType };
+      if (orderType === "market" && side === "BUY") body.quoteSize = parseFloat(quoteAmount);
+      if (orderType === "market" && side === "SELL") body.baseSize = parseFloat(cryptoQty);
+      if (orderType === "limit") { body.baseSize = parseFloat(cryptoQty); body.limitPrice = parseFloat(limitPrice); }
+      const r = await fetch("/api/coinbase/order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await r.json();
+      if (r.ok && data.success?.order_id) {
+        setResult({ ok: true, orderId: data.success.order_id, status: data.success.status });
+      } else {
+        const errMsg = data.error_response?.message || data.error || JSON.stringify(data);
+        setResult({ ok: false, error: errMsg });
+      }
+    } catch (e) {
+      setResult({ ok: false, error: e.message });
+    }
+    setPlacing(false);
+    setStep(3);
+  }
+
+  const btnBase = { border:"none", borderRadius:8, padding:"9px 22px", fontSize:12, fontFamily:"var(--ff-mono)", letterSpacing:"0.06em", cursor:"pointer", fontWeight:700 };
+  const inputStyle = { width:"100%", background:"var(--card)", border:"1px solid var(--border2)", borderRadius:8, padding:"10px 14px", color:"var(--text2)", fontFamily:"var(--ff-mono)", fontSize:15, boxSizing:"border-box" };
+
+  return (
+    <div onClick={onClose} style={{ position:"fixed", inset:0, background:"#00000090", zIndex:1000, display:"flex", alignItems:"center", justifyContent:"center", padding:"20px" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background:"var(--surface)", border:"1px solid var(--border2)", borderRadius:16, padding:"28px 32px", width:"100%", maxWidth:460 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:22 }}>
+          <div>
+            <h2 style={{ fontFamily:"var(--ff-head)", fontSize:20, fontWeight:800, color:"var(--text2)", margin:0 }}>Trade {sym}</h2>
+            <p style={{ fontSize:11, color:"var(--muted)", fontFamily:"var(--ff-mono)", margin:"4px 0 0", letterSpacing:"0.06em" }}>{name} · Coinbase · {effectiveProductId}</p>
+          </div>
+          <button onClick={onClose} style={{ background:"none", border:"none", color:"var(--muted2)", fontSize:20, cursor:"pointer", lineHeight:1 }}>✕</button>
+        </div>
+        <div style={{ background:"#ffab4015", border:"1px solid #ffab4040", borderRadius:8, padding:"8px 14px", marginBottom:20, display:"flex", alignItems:"center", gap:8 }}>
+          <span style={{ fontSize:13 }}>⚠</span>
+          <span style={{ fontSize:11, fontFamily:"var(--ff-mono)", color:"var(--amber)", letterSpacing:"0.06em" }}>LIVE TRADING · REAL FUNDS</span>
+        </div>
+
+        {step === 1 && (
+          <>
+            <div style={{ display:"flex", gap:8, marginBottom:18 }}>
+              {["BUY","SELL"].map(s => (
+                <button key={s} onClick={() => setSide(s)} style={{ ...btnBase, flex:1,
+                  background: s === side ? (s==="BUY" ? "var(--green)" : "var(--red)") : "var(--card)",
+                  color: s === side ? "#0a0a14" : "var(--muted2)",
+                  border:`1px solid ${s === side ? (s==="BUY" ? "var(--green)" : "var(--red)") : "var(--border)"}` }}>
+                  {s}
+                </button>
+              ))}
+            </div>
+            <div style={{ display:"flex", gap:8, marginBottom:22 }}>
+              {["market","limit"].map(t => (
+                <button key={t} onClick={() => setOrderType(t)} style={{ ...btnBase, flex:1, fontSize:10, letterSpacing:"0.1em",
+                  background: t === orderType ? "var(--card)" : "none",
+                  color: t === orderType ? "var(--text2)" : "var(--muted)",
+                  border:`1px solid ${t === orderType ? "var(--border2)" : "var(--border)"}`,
+                  fontWeight: t === orderType ? 700 : 400 }}>
+                  {t.toUpperCase()}
+                </button>
+              ))}
+            </div>
+            <div style={{ marginBottom:18 }}>
+              <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>{tradeCcy} AVAILABLE</div>
+              <div style={{ fontSize:16, fontFamily:"var(--ff-mono)", color:"var(--text2)", fontWeight:600 }}>
+                {availBal != null ? `${ccySymbol}${availBal.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}` : "Loading…"}
+              </div>
+            </div>
+            {orderType === "market" && side === "BUY" && (
+              <div style={{ marginBottom:18 }}>
+                <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>AMOUNT ({tradeCcy})</div>
+                <input value={quoteAmount} onChange={e => setQuoteAmount(e.target.value)} type="number" min="0" placeholder="e.g. 100" style={inputStyle}/>
+                {estQty && <div style={{ fontSize:10, color:"var(--muted)", fontFamily:"var(--ff-mono)", marginTop:6 }}>≈ {estQty} {sym}</div>}
+              </div>
+            )}
+            {orderType === "market" && side === "SELL" && (
+              <div style={{ marginBottom:18 }}>
+                <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>QUANTITY ({sym})</div>
+                <input value={cryptoQty} onChange={e => setCryptoQty(e.target.value)} type="number" min="0" placeholder="e.g. 0.005" style={inputStyle}/>
+              </div>
+            )}
+            {orderType === "limit" && (
+              <>
+                <div style={{ marginBottom:14 }}>
+                  <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>QUANTITY ({sym})</div>
+                  <input value={cryptoQty} onChange={e => setCryptoQty(e.target.value)} type="number" min="0" placeholder="e.g. 0.005" style={inputStyle}/>
+                </div>
+                <div style={{ marginBottom:18 }}>
+                  <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>LIMIT PRICE ({tradeCcy})</div>
+                  <input value={limitPrice} onChange={e => setLimitPrice(e.target.value)} type="number" min="0" placeholder={tradeCcy === "AUD" ? "e.g. 150000" : "e.g. 95000"} style={inputStyle}/>
+                </div>
+              </>
+            )}
+            <button onClick={() => setStep(2)} disabled={!canReview}
+              style={{ ...btnBase, width:"100%", background: side === "BUY" ? "var(--green)" : "var(--red)", color:"#0a0a14", opacity: canReview ? 1 : 0.4 }}>
+              REVIEW ORDER →
+            </button>
+          </>
+        )}
+
+        {step === 2 && (
+          <>
+            <div style={{ background:"var(--card)", border:"1px solid var(--border)", borderRadius:12, padding:"18px 20px", marginBottom:20 }}>
+              {[
+                { l:"SYMBOL", v:effectiveProductId },
+                { l:"SIDE", v:side },
+                { l:"TYPE", v:orderType.toUpperCase() },
+                orderType === "market" && side === "BUY" && { l:"SPEND", v:`${ccySymbol}${parseFloat(quoteAmount).toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})} ${tradeCcy}` },
+                orderType === "market" && side === "SELL" && { l:"SELL QTY", v:`${cryptoQty} ${sym}` },
+                orderType === "limit" && { l:"QTY", v:`${cryptoQty} ${sym}` },
+                orderType === "limit" && { l:"LIMIT PRICE", v:`${ccySymbol}${parseFloat(limitPrice).toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})} ${tradeCcy}` },
+              ].filter(Boolean).map(f => (
+                <div key={f.l} style={{ display:"flex", justifyContent:"space-between", marginBottom:12 }}>
+                  <span style={{ fontSize:10, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em" }}>{f.l}</span>
+                  <span style={{ fontSize:13, fontFamily:"var(--ff-mono)", color:"var(--text2)", fontWeight:600 }}>{f.v}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{ display:"flex", gap:10 }}>
+              <button onClick={() => setStep(1)} style={{ ...btnBase, flex:1, background:"none", color:"var(--muted2)", border:"1px solid var(--border)" }}>← BACK</button>
+              <button onClick={placeOrder} disabled={placing}
+                style={{ ...btnBase, flex:2, background: side === "BUY" ? "var(--green)" : "var(--red)", color:"#0a0a14", opacity:placing?0.6:1 }}>
+                {placing ? "PLACING…" : "PLACE ORDER"}
+              </button>
+            </div>
+          </>
+        )}
+
+        {step === 3 && result && (
+          <>
+            <div style={{ textAlign:"center", padding:"20px 0 28px" }}>
+              {result.ok ? (
+                <>
+                  <div style={{ fontSize:36, marginBottom:12 }}>✓</div>
+                  <div style={{ fontFamily:"var(--ff-head)", fontSize:18, fontWeight:800, color:"var(--green)", marginBottom:8 }}>Order Placed</div>
+                  <div style={{ fontSize:11, fontFamily:"var(--ff-mono)", color:"var(--muted2)", marginBottom:6 }}>Order ID: {result.orderId}</div>
+                  {result.status && <div style={{ fontSize:11, fontFamily:"var(--ff-mono)", color:"var(--muted)" }}>Status: {result.status}</div>}
+                </>
+              ) : (
+                <>
+                  <div style={{ fontSize:36, marginBottom:12 }}>✕</div>
+                  <div style={{ fontFamily:"var(--ff-head)", fontSize:18, fontWeight:800, color:"var(--red)", marginBottom:8 }}>Order Failed</div>
+                  <div style={{ fontSize:12, fontFamily:"var(--ff-mono)", color:"var(--muted2)", lineHeight:1.5 }}>{result.error}</div>
+                </>
+              )}
+            </div>
+            <button onClick={() => { result.ok ? onSuccess() : onClose(); }}
+              style={{ ...btnBase, width:"100%", background: result.ok ? "var(--green)" : "var(--card)", color: result.ok ? "#0a0a14" : "var(--muted2)", border: result.ok ? "none" : "1px solid var(--border)" }}>
+              DONE
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Glossary modal ─────────────────────────────────────────────────────────
 function GlossaryModal({ open, onClose, focusTerm, allGlossary }) {
   const termRefs = useRef({});
@@ -2013,6 +2221,7 @@ export default function App() {
   const [glossaryOpen,setGlossaryOpen] = useState(false);
   const [glossaryTerm,setGlossaryTerm] = useState(null);
   const openGlossary = t => { setGlossaryTerm(t||null); setGlossaryOpen(true); };
+  const [tradeModal,setTradeModal] = useState(null);
   const [customTerms,setCustomTerms] = useState(() => {
     try { return JSON.parse(localStorage.getItem("inteliq_glossary_custom") || "[]"); } catch { return []; }
   });
@@ -2469,7 +2678,7 @@ export default function App() {
         sym: parsed.sym,           name: parsed.name || parsed.sym,
         verdict: parsed.verdict,   conviction: parsed.conviction || "MEDIUM",
         horizon: parsed.horizon || "Medium",
-        priceAtCall:   parsed.priceAtCall  || parsed.priceStatic || null,
+        priceAtCall:   livePrices[parsed.sym]?.price || parsed.priceAtCall || parsed.priceStatic || null,
         priceType:     parsed.priceType    || "stock",
         priceCurrency: parsed.priceCurrency|| "USD",
         calledAt: new Date().toISOString(),
@@ -2642,9 +2851,16 @@ export default function App() {
                     <div style={{marginTop:16,background:"var(--card)",border:"1px solid var(--border)",borderRadius:14,padding:"16px 20px"}}>
                       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
                         <span style={{fontSize:10,fontFamily:"var(--ff-mono)",color:"var(--muted)",letterSpacing:"0.12em",textTransform:"uppercase"}}>Price Chart — 1 Month</span>
-                        <button onClick={()=>openDetail({sym:searchResult.sym,name:searchResult.name,priceType:searchResult.priceType,priceCurrency:searchResult.priceCurrency||"USD",sector:searchResult.sector},searchResult,explorerAnalysis)} style={{background:"none",border:"1px solid var(--border)",borderRadius:7,padding:"4px 12px",fontSize:10,color:"var(--muted2)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em"}}>
-                          FULL ANALYSIS →
-                        </button>
+                        <div style={{display:"flex",gap:8}}>
+                          {searchResult?.priceType==="crypto" && cbLastSync && !cbError && (
+                            <button onClick={()=>setTradeModal({sym:searchResult.sym,name:searchResult.name,productId:`${searchResult.sym}-USD`,side:"BUY",priceType:"crypto"})} style={{background:"#00e67610",border:"1px solid #00e67640",borderRadius:7,padding:"4px 12px",fontSize:10,color:"var(--green)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",fontWeight:700}}>
+                              ↔ TRADE
+                            </button>
+                          )}
+                          <button onClick={()=>openDetail({sym:searchResult.sym,name:searchResult.name,priceType:searchResult.priceType,priceCurrency:searchResult.priceCurrency||"USD",sector:searchResult.sector},searchResult,explorerAnalysis)} style={{background:"none",border:"1px solid var(--border)",borderRadius:7,padding:"4px 12px",fontSize:10,color:"var(--muted2)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em"}}>
+                            FULL ANALYSIS →
+                          </button>
+                        </div>
                       </div>
                       <ChartCanvas candles={explorerChart.candles} analysis={null} range="1mo" currency={explorerChart.currency} indicators={explorerChart.indicators}/>
                     </div>
@@ -2855,7 +3071,7 @@ export default function App() {
                             const avgUSD   = toDisplay(h.avg, h.avgCurrency || "USD", "USD", audUsd);
                             const valueUSD = priceUSD != null ? h.qty * priceUSD : h.qty * avgUSD;
                             const weight   = totalPortUSD > 0 ? (valueUSD / totalPortUSD) * 100 : null;
-                            return <HoldingRow key={`${h.source}-${h.sym}`} holding={h} livePrice={livePrices[h.sym]} expanded={portExp===`${h.source}-${h.sym}`} onToggle={()=>setPortExp(p=>p===`${h.source}-${h.sym}`?null:`${h.source}-${h.sym}`)} onRemove={h.source==="cmc"?()=>setCmc(p=>p.filter(x=>x.sym!==h.sym)):null} onViewChart={()=>openDetail({sym:h.sym,name:h.name,priceType:h.priceType,priceCurrency:h.priceCurrency||"USD",sector:h.sector})} displayCcy={displayCcy} audUsd={audUsd} portWeight={weight}/>;
+                            return <HoldingRow key={`${h.source}-${h.sym}`} holding={h} livePrice={livePrices[h.sym]} expanded={portExp===`${h.source}-${h.sym}`} onToggle={()=>setPortExp(p=>p===`${h.source}-${h.sym}`?null:`${h.source}-${h.sym}`)} onRemove={h.source==="cmc"?()=>setCmc(p=>p.filter(x=>x.sym!==h.sym)):null} onViewChart={()=>openDetail({sym:h.sym,name:h.name,priceType:h.priceType,priceCurrency:h.priceCurrency||"USD",sector:h.sector})} onTrade={h.source==="coinbase"?cfg=>setTradeModal(cfg):null} displayCcy={displayCcy} audUsd={audUsd} portWeight={weight}/>;
                           });
                         })()}
                       </div>
@@ -2875,7 +3091,7 @@ export default function App() {
               )}
 
               {portTab==="coinbase"&&(
-                <SourcePanel label="Coinbase" color="var(--amber)" holdings={cbHoldings} livePrices={livePrices} syncing={cbSyncing} lastSync={cbLastSync} error={cbError} onSync={syncCoinbase} onRemove={sym=>setCb(p=>p.filter(h=>h.sym!==sym))} onViewChart={h=>openDetail({sym:h.sym,name:h.name,priceType:h.priceType,priceCurrency:h.priceCurrency||"USD",sector:h.sector})} displayCcy={displayCcy} audUsd={audUsd}/>
+                <SourcePanel label="Coinbase" color="var(--amber)" holdings={cbHoldings} livePrices={livePrices} syncing={cbSyncing} lastSync={cbLastSync} error={cbError} onSync={syncCoinbase} onRemove={sym=>setCb(p=>p.filter(h=>h.sym!==sym))} onViewChart={h=>openDetail({sym:h.sym,name:h.name,priceType:h.priceType,priceCurrency:h.priceCurrency||"USD",sector:h.sector})} onTrade={cfg=>setTradeModal(cfg)} displayCcy={displayCcy} audUsd={audUsd}/>
               )}
 
               {portTab==="coinspot"&&(
@@ -3842,7 +4058,14 @@ export default function App() {
                         )}
                       </div>
                     </div>
-                    <CurrencyToggle value={displayCcy} onChange={setDisplayCcy}/>
+                    <div style={{display:"flex",gap:8,alignItems:"flex-start",flexWrap:"wrap"}}>
+                      {detailSym?.priceType==="crypto" && cbLastSync && !cbError && (
+                        <button onClick={()=>setTradeModal({sym:detailSym.sym,name:detailSym.name,productId:`${detailSym.sym}-USD`,side:"BUY",priceType:"crypto"})} style={{background:"#00e67610",border:"1px solid #00e67640",borderRadius:8,padding:"8px 18px",fontSize:11,color:"var(--green)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",fontWeight:700,cursor:"pointer"}}>
+                          ↔ TRADE
+                        </button>
+                      )}
+                      <CurrencyToggle value={displayCcy} onChange={setDisplayCcy}/>
+                    </div>
                   </div>
                 )}
               </div>
@@ -3988,6 +4211,9 @@ export default function App() {
 
         </main>
       </div>
+      {tradeModal && (
+        <TradeModal config={tradeModal} onClose={()=>setTradeModal(null)} onSuccess={()=>{setTradeModal(null);syncCoinbase();}} displayCcy={displayCcy}/>
+      )}
       <GlossaryModal open={glossaryOpen} onClose={()=>setGlossaryOpen(false)} focusTerm={glossaryTerm} allGlossary={allGlossary}/>
     </>
     </GlossaryCtx.Provider>
