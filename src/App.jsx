@@ -746,13 +746,16 @@ function CallCard({ record, currentPriceData, onAnalyse, priceFetching }) {
             </div>
             <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" }}>
               <span style={{ fontSize:12, color:"var(--muted2)" }}>{record.name}</span>
-              <span style={{ fontSize:10, color:"var(--muted)", fontFamily:"var(--ff-mono)" }}>{ageSince(record.calledAt)}</span>
               {record.target && <span style={{ fontSize:10, color:"var(--muted)", fontFamily:"var(--ff-mono)" }}>tgt {record.target}</span>}
             </div>
           </div>
         </div>
         {/* Right */}
         <div style={{ display:"flex", gap:20, alignItems:"center", flexShrink:0, flexWrap:"wrap" }}>
+          <div style={{ textAlign:"right" }}>
+            <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:3 }}>AGE</div>
+            <div style={{ fontFamily:"var(--ff-mono)", fontSize:14, fontWeight:500, color:"var(--text2)" }}>{ageSince(record.calledAt)}</div>
+          </div>
           <div style={{ textAlign:"right" }}>
             <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:3 }}>CALLED AT</div>
             <div style={{ fontFamily:"var(--ff-mono)", fontSize:14, fontWeight:500, color:"var(--text2)" }}>{fmtP(priceAtCall)}</div>
