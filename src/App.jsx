@@ -119,13 +119,16 @@ const GLOSSARY = [
   { term:"Higher High",                def:"When the most recent price peak exceeds the prior peak. A series of higher highs (and higher lows) defines an uptrend." },
   { term:"Lower Low",                  def:"When the most recent trough falls below the prior trough. A series of lower lows (and lower highs) defines a downtrend." },
   { term:"Stop Loss",                  def:"A pre-defined price at which a position is closed to cap losses. Critical risk management — prevents a small loss from becoming a large one if the trade moves against you." },
-  { term:"Volatility",                 def:"The degree of price variation over time. High volatility means larger swings and higher uncertainty; low volatility means more stable, predictable price action." },
+  { term:"Volatility",                 def:"The degree of price variation over time. High volatility means larger swings and higher uncertainty; low volatility means more stable, predictable price action. As a portfolio risk metric, annualised volatility measures the standard deviation of daily returns scaled to a year — below 15% is considered low risk, above 25% is high risk." },
   { term:"Volume",                     def:"The total number of shares or coins traded in a given period. Volume confirms price moves — a breakout on high volume is more reliable than one on low volume." },
   { term:"Candlestick",                def:"A chart bar showing the open, high, low, and close for a time period. Green candles close higher than they opened; red close lower. Patterns signal reversals or continuations." },
   { term:"OHLCV",                      def:"Open, High, Low, Close, Volume — the five data points that make up each candlestick. The foundation of all technical chart analysis." },
   { term:"Market Cap",                 def:"Total market capitalisation: share price × total shares outstanding. Used to classify companies — large-cap (>$10B), mid-cap ($2–10B), small-cap (<$2B)." },
   { term:"Dollar Cost Averaging",      def:"Investing a fixed amount at regular intervals regardless of price. Reduces timing risk — you buy more units when cheap and fewer when expensive." },
   { term:"P&L",                        def:"Profit and Loss. Unrealised P&L exists while the position is open; realised P&L is locked in when closed. Calculated as (current price − average cost) / average cost × 100%." },
+  { term:"Beta",                       def:"A measure of a portfolio's or stock's sensitivity to market movements relative to a benchmark (typically the S&P 500). Beta < 1 means less volatile than the market (lower risk); Beta > 1 means more volatile (higher risk); Beta < 0 means it tends to move inversely to the market." },
+  { term:"Sharpe Ratio",               def:"A measure of risk-adjusted return. Calculated as (portfolio return − risk-free rate) / portfolio volatility. A Sharpe above 1.0 is considered good — it means you are being adequately compensated for the risk taken. Below 0 means the portfolio underperformed the risk-free rate." },
+  { term:"Maximum Drawdown",           def:"The largest peak-to-trough decline in portfolio value over a given period, expressed as a percentage. A Max Drawdown of −20% means the portfolio fell 20% from its highest point before recovering. It measures downside risk and the worst loss an investor could have experienced." },
 ];
 
 const TABS = [
@@ -636,6 +639,7 @@ function BenchmarkStrip({ holdings, livePrices, audUsd }) {
 
 // ── Risk Metrics Panel ──────────────────────────────────────────────────────
 function RiskPanel({ holdings, audUsd }) {
+  const { openGlossary } = useContext(GlossaryCtx);
   const [risk,       setRisk]       = useState(null);
   const [loading,    setLoading]    = useState(false);
   const [hasFetched, setHasFetched] = useState(false);
@@ -661,7 +665,7 @@ function RiskPanel({ holdings, audUsd }) {
 
   const stats = risk ? [
     {
-      label: "Beta",
+      label: "Beta", glossaryTerm: "Beta",
       sub:   "vs S&P 500",
       value: risk.beta != null ? risk.beta.toFixed(2) : "—",
       color: risk.beta == null ? "var(--muted)"
@@ -669,7 +673,7 @@ function RiskPanel({ holdings, audUsd }) {
            : risk.beta > 1.2  ? "var(--red)"   : "var(--amber)",
     },
     {
-      label: "Volatility",
+      label: "Volatility", glossaryTerm: "Volatility",
       sub:   "annualised",
       value: risk.volatility != null ? `${risk.volatility.toFixed(1)}%` : "—",
       color: risk.volatility == null   ? "var(--muted)"
@@ -677,7 +681,7 @@ function RiskPanel({ holdings, audUsd }) {
            : risk.volatility > 25      ? "var(--red)"   : "var(--amber)",
     },
     {
-      label: "Sharpe",
+      label: "Sharpe", glossaryTerm: "Sharpe Ratio",
       sub:   "4.5% rf",
       value: risk.sharpe != null ? risk.sharpe.toFixed(2) : "—",
       color: risk.sharpe == null ? "var(--muted)"
@@ -685,7 +689,7 @@ function RiskPanel({ holdings, audUsd }) {
            : risk.sharpe > 0    ? "var(--amber)" : "var(--red)",
     },
     {
-      label: "Max DD",
+      label: "Max DD", glossaryTerm: "Maximum Drawdown",
       sub:   "1 year",
       value: risk.maxDrawdown != null ? `${risk.maxDrawdown.toFixed(1)}%` : "—",
       color: risk.maxDrawdown == null     ? "var(--muted)"
@@ -718,7 +722,7 @@ function RiskPanel({ holdings, audUsd }) {
             <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:12 }}>
               {stats.map(s => (
                 <div key={s.label} style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:10, padding:"14px 16px" }}>
-                  <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>{s.label}</div>
+                  <button onClick={() => openGlossary(s.glossaryTerm)} style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6, background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline dotted", textUnderlineOffset:3 }}>{s.label}</button>
                   <div style={{ fontSize:22, fontWeight:800, fontFamily:"var(--ff-mono)", color:s.color, lineHeight:1 }}>{s.value}</div>
                   <div style={{ fontSize:10, color:"var(--muted)", marginTop:4 }}>{s.sub}</div>
                 </div>
