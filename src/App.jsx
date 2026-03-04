@@ -375,6 +375,133 @@ function SummaryStrip({ holdings, livePrices, displayCcy, audUsd }) {
   );
 }
 
+// ── Allocation Panel ───────────────────────────────────────────────────────
+const SECTOR_COLOURS = [
+  "#448aff","#00e676","#ffab40","#ff5252","#e040fb","#00bcd4","#8bc34a",
+  "#ff9800","#9c27b0","#f06292","#26c6da","#d4e157",
+];
+
+function AllocationPanel({ holdings, livePrices, audUsd, displayCcy }) {
+  const canvasRef = useRef(null);
+
+  // Compute sector breakdown and top holdings
+  let totalUSD = 0;
+  const sectorMap = {};
+  const holdingValues = [];
+
+  for (const h of holdings) {
+    const lp = livePrices[h.sym];
+    const priceCcy = h.priceCurrency || lp?.currency || "USD";
+    const livePrice = lp?.price;
+    const priceUSD = livePrice ? toDisplay(livePrice, priceCcy, "USD", audUsd) : null;
+    const avgUSD   = toDisplay(h.avg, h.avgCurrency || "USD", "USD", audUsd);
+    const valueUSD = priceUSD != null ? h.qty * priceUSD : h.qty * avgUSD;
+    totalUSD += valueUSD;
+    const sector = h.sector || (h.priceType === "crypto" ? "Crypto" : "Other");
+    sectorMap[sector] = (sectorMap[sector] || 0) + valueUSD;
+    holdingValues.push({ sym: h.sym, valueUSD, pct: 0 });
+  }
+
+  // Finalise holding weights
+  holdingValues.forEach(h => { h.pct = totalUSD > 0 ? (h.valueUSD / totalUSD) * 100 : 0; });
+  holdingValues.sort((a, b) => b.valueUSD - a.valueUSD);
+  const top5 = holdingValues.slice(0, 5);
+
+  // Sector data sorted descending
+  const sectors = Object.entries(sectorMap)
+    .map(([name, usd]) => ({ name, pct: totalUSD > 0 ? (usd / totalUSD) * 100 : 0 }))
+    .sort((a, b) => b.pct - a.pct);
+
+  // Draw donut on mount / data change — hooks must be before early returns
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || sectors.length === 0) return;
+    const size = canvas.width;
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, size, size);
+    const cx = size / 2, cy = size / 2;
+    const outerR = size * 0.44, innerR = size * 0.26;
+    let angle = -Math.PI / 2;
+    sectors.forEach((s, i) => {
+      const slice = (s.pct / 100) * 2 * Math.PI;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, outerR, angle, angle + slice);
+      ctx.closePath();
+      ctx.fillStyle = SECTOR_COLOURS[i % SECTOR_COLOURS.length];
+      ctx.fill();
+      angle += slice;
+    });
+    // Punch inner hole
+    ctx.beginPath();
+    ctx.arc(cx, cy, innerR, 0, 2 * Math.PI);
+    ctx.fillStyle = "#1a1630";
+    ctx.fill();
+    // Centre label
+    ctx.fillStyle = "#e8e0ff";
+    ctx.font = `800 ${Math.round(size * 0.1)}px 'Outfit',sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(`${sectors.length}`, cx, cy - size * 0.04);
+    ctx.fillStyle = "#8a80aa";
+    ctx.font = `500 ${Math.round(size * 0.07)}px 'DM Sans',sans-serif`;
+    ctx.fillText("sectors", cx, cy + size * 0.07);
+  }, [sectors]);
+
+  if (totalUSD === 0) return null;
+
+  return (
+    <div style={{ background:"var(--card)", border:"1px solid var(--border)", borderRadius:14, padding:20, marginBottom:24 }}>
+      <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.12em", marginBottom:16 }}>ALLOCATION</div>
+      <div style={{ display:"grid", gridTemplateColumns:"160px 1fr 1fr", gap:24, alignItems:"start" }}>
+
+        {/* Donut */}
+        <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:10 }}>
+          <canvas ref={canvasRef} width={160} height={160} style={{ borderRadius:"50%" }}/>
+        </div>
+
+        {/* Sector bars */}
+        <div>
+          <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:10 }}>BY SECTOR</div>
+          {sectors.map((s, i) => (
+            <div key={s.name} style={{ marginBottom:8 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", marginBottom:3 }}>
+                <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                  <span style={{ width:8, height:8, borderRadius:2, background:SECTOR_COLOURS[i % SECTOR_COLOURS.length], display:"inline-block", flexShrink:0 }}/>
+                  <span style={{ fontSize:11, color:"var(--text2)", fontFamily:"var(--ff-mono)" }}>{s.name}</span>
+                </div>
+                <span style={{ fontSize:11, color:"var(--muted2)", fontFamily:"var(--ff-mono)" }}>{s.pct.toFixed(1)}%</span>
+              </div>
+              <div style={{ height:4, borderRadius:2, background:"var(--surface)", overflow:"hidden" }}>
+                <div style={{ height:"100%", width:`${s.pct}%`, background:SECTOR_COLOURS[i % SECTOR_COLOURS.length], borderRadius:2, transition:"width 0.4s ease" }}/>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Top holdings */}
+        <div>
+          <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:10 }}>TOP HOLDINGS</div>
+          {top5.map((h, i) => (
+            <div key={h.sym} style={{ display:"flex", alignItems:"center", gap:10, marginBottom:8 }}>
+              <span style={{ fontSize:10, color:"var(--muted)", fontFamily:"var(--ff-mono)", width:14 }}>{i + 1}</span>
+              <div style={{ flex:1 }}>
+                <div style={{ display:"flex", justifyContent:"space-between", marginBottom:3 }}>
+                  <span style={{ fontSize:11, color:"var(--text2)", fontFamily:"var(--ff-mono)", fontWeight:600 }}>{h.sym}</span>
+                  <span style={{ fontSize:11, color:"var(--muted2)", fontFamily:"var(--ff-mono)" }}>{h.pct.toFixed(1)}%</span>
+                </div>
+                <div style={{ height:4, borderRadius:2, background:"var(--surface)", overflow:"hidden" }}>
+                  <div style={{ height:"100%", width:`${h.pct}%`, background:"var(--purple)", borderRadius:2, transition:"width 0.4s ease" }}/>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Holding row ────────────────────────────────────────────────────────────
 function HoldingRow({ holding, livePrice, expanded, onToggle, onRemove, onViewChart, displayCcy, audUsd }) {
   const priceCcy  = holding.priceCurrency || livePrice?.currency || "USD";
@@ -2227,6 +2354,7 @@ export default function App() {
                 allHoldings.length>0 ? (
                   <>
                     <div className="fu"><SummaryStrip holdings={allHoldings} livePrices={livePrices} displayCcy={displayCcy} audUsd={audUsd}/></div>
+                    <div className="fu"><AllocationPanel holdings={allHoldings} livePrices={livePrices} audUsd={audUsd} displayCcy={displayCcy}/></div>
                     <div className="fu2">
                       <div className="section-label">ALL HOLDINGS</div>
                       <div style={{display:"grid",gap:8}}>
