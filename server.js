@@ -760,6 +760,46 @@ app.post("/api/glossary/extract", async (req, res) => {
 });
 
 
+// ── Macro Event Calendar ───────────────────────────────────────────────────
+let macroCache = { events: null, ts: 0 };
+
+app.post("/api/macro", async (req, res) => {
+  const { holdingSyms } = req.body || {};
+  const now = Date.now();
+  // Cache macro events for 4h
+  if (macroCache.events && now - macroCache.ts < 4 * 60 * 60 * 1000) {
+    return res.json(macroCache.events);
+  }
+  const today = new Date().toLocaleDateString("en-AU", { year:"numeric", month:"long", day:"numeric" });
+  const holdings = Array.isArray(holdingSyms) && holdingSyms.length > 0
+    ? holdingSyms.slice(0, 20).join(", ")
+    : "no specific holdings provided";
+  try {
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type":"application/json", "x-api-key":ANTHROPIC_API_KEY, "anthropic-version":"2023-06-01" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514", max_tokens: 2500,
+        system: `You are a macro economist. Today is ${today}. Generate the upcoming macro events for the next 6 weeks that matter to investors. Include central bank meetings, major economic data releases (CPI, jobs, GDP, PMI), and any known scheduled events. For each event, assess the portfolio impact for these holdings: ${holdings}. Return ONLY valid JSON array (no markdown):
+[{"date":"YYYY-MM-DD","event":"Event name","category":"FED|RBA|ECB|INFLATION|EMPLOYMENT|GROWTH|TRADE|OTHER","country":"US|AU|EU|CN|GLOBAL","importance":"HIGH|MEDIUM|LOW","preview":"1 sentence on what to expect","portfolioImpact":"1-2 sentences on how this affects the specific holdings listed — be specific about which holdings are most affected","bullCase":"If outcome beats expectations: 1 sentence","bearCase":"If outcome misses: 1 sentence","affectedHoldings":["SYM1","SYM2"]}]
+Return 8–14 events. Sort by date ascending. Only include events you are confident will occur around this time — do not invent speculative events.`,
+        messages: [{ role:"user", content: `Today is ${today}. Generate the macro calendar for the next 6 weeks.` }],
+      }),
+    });
+    const d = await response.json();
+    const text = d.content?.find(b => b.type === "text")?.text || "";
+    const start = text.indexOf("["), end = text.lastIndexOf("]");
+    if (start === -1 || end === -1) throw new Error("No JSON array");
+    const parsed = JSON.parse(text.slice(start, end + 1));
+    macroCache = { events: parsed, ts: now };
+    console.log(`Macro: generated ${parsed.length} events`);
+    res.json(parsed);
+  } catch (err) {
+    console.error("Macro error:", err.message);
+    res.status(500).json({ error: "Macro calendar failed" });
+  }
+});
+
 // ── Natural Language Screener ──────────────────────────────────────────────
 app.post("/api/screener", async (req, res) => {
   const { query } = req.body;
