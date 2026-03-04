@@ -760,6 +760,46 @@ app.post("/api/glossary/extract", async (req, res) => {
 });
 
 
+// ── Portfolio Coach ────────────────────────────────────────────────────────
+app.post("/api/portfolio/coach", async (req, res) => {
+  const { snapshot } = req.body;
+  if (!snapshot || !snapshot.holdings?.length)
+    return res.status(400).json({ error: "Portfolio snapshot required" });
+  try {
+    const today = new Date().toLocaleDateString("en-AU", { year:"numeric", month:"long", day:"numeric" });
+    const lines = [
+      `Total portfolio value: $${snapshot.totalValueUSD.toFixed(0)} USD`,
+      `Positions: ${snapshot.holdings.length}`,
+      `Asset split: ${snapshot.cryptoPct.toFixed(1)}% crypto / ${snapshot.stocksPct.toFixed(1)}% stocks/ETFs`,
+      "", "HOLDINGS (sorted by weight):",
+      ...snapshot.holdings.map(p =>
+        `- ${p.sym} (${p.name}): ${p.pct.toFixed(1)}% = $${p.valueUSD.toFixed(0)} | type:${p.priceType} | sector:${p.sector} | unrealised:${p.unrealisedPct != null ? (p.unrealisedPct >= 0 ? "+" : "") + p.unrealisedPct.toFixed(1) + "%" : "n/a"}`
+      ),
+      "", "SECTOR BREAKDOWN:",
+      ...Object.entries(snapshot.sectorBreakdown).sort((a,b) => b[1]-a[1]).map(([s,pct]) => `- ${s}: ${pct.toFixed(1)}%`),
+    ];
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type":"application/json", "x-api-key":ANTHROPIC_API_KEY, "anthropic-version":"2023-06-01" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514", max_tokens: 2000,
+        system: `You are a senior portfolio strategist. Today is ${today}. Analyse this portfolio and provide honest, actionable coaching. Be specific — name actual positions. Return ONLY valid JSON (no markdown fences):
+{"grade":"A|B|C|D|F","gradeNote":"One sentence justifying the grade","summary":"2-3 sentences overall portfolio assessment","concentration":"2-3 sentences naming specific over-weight positions","diversification":"2-3 sentences on diversification quality","riskProfile":"AGGRESSIVE|BALANCED|CONSERVATIVE","riskNote":"1-2 sentences","strengths":["up to 3 short strength strings"],"weaknesses":["up to 3 short weakness strings"],"actions":[{"priority":"HIGH|MEDIUM|LOW","action":"Specific action to take","reason":"Why this matters"}],"sectorComment":"1-2 sentences on sector allocation","cryptoComment":"1-2 sentences on crypto allocation — omit key if no crypto","outlook":"1-2 sentences on portfolio outlook given current market conditions"}
+Provide 2-4 specific, concrete actions.`,
+        messages: [{ role:"user", content: lines.join("\n") }],
+      }),
+    });
+    const d = await response.json();
+    const text = d.content?.find(b => b.type === "text")?.text || "";
+    const s = text.indexOf("{"), e = text.lastIndexOf("}");
+    if (s === -1 || e === -1) throw new Error("No JSON in response");
+    res.json(JSON.parse(text.slice(s, e + 1)));
+  } catch (err) {
+    console.error("Portfolio coach error:", err.message);
+    res.status(500).json({ error: "Coach analysis failed" });
+  }
+});
+
 // ── Health ─────────────────────────────────────────────────────────────────
 app.get("/health", (_, res) => res.json({
   status: "ok",

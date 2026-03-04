@@ -132,6 +132,7 @@ const TABS = [
   { id:"dashboard", label:"Dashboard", icon:"◈" },
   { id:"explorer",  label:"Explorer",  icon:"◎" },
   { id:"portfolio", label:"Portfolio", icon:"◑" },
+  { id:"coach",     label:"Coach",     icon:"◭" },
   { id:"news",      label:"News",      icon:"◉" },
   { id:"watchlist", label:"Watchlist", icon:"◇" },
   { id:"ipo",       label:"IPO",       icon:"◆" },
@@ -1300,6 +1301,11 @@ export default function App() {
   const [ipoFilter,  setIpoFilter]  = useState("ALL");
   const [ipoError,   setIpoError]   = useState(null);
 
+  // Portfolio Coach
+  const [coachReport,  setCoachReport]  = useState(null);
+  const [coachLoading, setCoachLoading] = useState(false);
+  const [coachError,   setCoachError]   = useState(null);
+
   // AI Call Record
   const [callRecords,        setCallRecords]        = useState(() => {
     try { return JSON.parse(localStorage.getItem("inteliq_calls") || "[]"); } catch { return []; }
@@ -1469,6 +1475,11 @@ export default function App() {
       .finally(() => setCallsPriceFetching(false));
   }, [tab]);
 
+  useEffect(() => {
+    if (tab !== "coach" || allHoldings.length === 0) return;
+    if (!coachReport && !coachLoading) runCoachAnalysis();
+  }, [tab, allHoldings.length]);
+
   async function openDetail(symInfo, stock = null, preloadedAnalysis = null) {
     setDetailFrom(tab);
     setDetailSym(symInfo);
@@ -1621,6 +1632,40 @@ export default function App() {
       addedAt: new Date().toISOString(),
       note: stock.summary ? stock.summary.slice(0, 100) + (stock.summary.length > 100 ? "…" : "") : "",
     }, ...prev]);
+  }
+
+  function buildPortfolioSnapshot(holdings, prices, audUsdRate) {
+    let totalUSD = 0;
+    const details = [];
+    for (const h of holdings) {
+      const lp = prices[h.sym];
+      const priceCcy = h.priceCurrency || lp?.currency || "USD";
+      const price = lp?.price;
+      const priceUSD = price ? toDisplay(price, priceCcy, "USD", audUsdRate) : null;
+      const avgUSD   = h.avg ? toDisplay(h.avg, h.avgCurrency || "USD", "USD", audUsdRate) : null;
+      const valueUSD = priceUSD != null ? h.qty * priceUSD : (avgUSD ? h.qty * avgUSD : 0);
+      const unrealisedPct = priceUSD && avgUSD ? ((priceUSD - avgUSD) / avgUSD) * 100 : null;
+      totalUSD += valueUSD;
+      details.push({ sym: h.sym, name: h.name || h.sym, sector: h.sector || "Unknown", priceType: h.priceType || "stock", valueUSD, unrealisedPct });
+    }
+    details.forEach(d => { d.pct = totalUSD > 0 ? (d.valueUSD / totalUSD) * 100 : 0; });
+    details.sort((a, b) => b.valueUSD - a.valueUSD);
+    const sectorBreakdown = {};
+    details.forEach(d => { const s = d.sector || "Unknown"; sectorBreakdown[s] = (sectorBreakdown[s] || 0) + d.pct; });
+    const cryptoPct = details.filter(d => d.priceType === "crypto").reduce((s, d) => s + d.pct, 0);
+    return { totalValueUSD: totalUSD, holdings: details, sectorBreakdown, cryptoPct, stocksPct: 100 - cryptoPct };
+  }
+
+  async function runCoachAnalysis() {
+    setCoachLoading(true); setCoachError(null);
+    const snapshot = buildPortfolioSnapshot(allHoldings, livePrices, audUsd);
+    if (!snapshot.holdings.length) { setCoachError("No holdings available"); setCoachLoading(false); return; }
+    try {
+      const r = await fetch("/api/portfolio/coach", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ snapshot }) });
+      const d = await r.json();
+      if (d.error) setCoachError(d.error); else setCoachReport(d);
+    } catch { setCoachError("Analysis failed — check your connection"); }
+    setCoachLoading(false);
   }
 
   function recordCall(parsed, source) {
@@ -2068,6 +2113,167 @@ export default function App() {
             </div>
           )}
 
+
+          {/* ══ PORTFOLIO COACH ══ */}
+          {tab==="coach"&&(
+            <div>
+              <div className="fu" style={{marginBottom:24}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap"}}>
+                  <div>
+                    <h1 style={{fontFamily:"var(--ff-head)",fontSize:26,fontWeight:800,color:"var(--text2)",marginBottom:6}}>Portfolio Coach</h1>
+                    <p style={{fontSize:13,color:"var(--muted2)"}}>AI-powered portfolio health check — concentration, risk, and rebalancing advice.</p>
+                  </div>
+                  {coachReport && (
+                    <button onClick={()=>{setCoachReport(null);runCoachAnalysis();}} disabled={coachLoading} style={{background:"none",border:"1px solid var(--border)",borderRadius:8,padding:"7px 16px",fontSize:10,color:coachLoading?"var(--muted)":"var(--muted2)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",opacity:coachLoading?.5:1}}>
+                      {coachLoading?"↻ ANALYSING…":"↻ REFRESH"}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {allHoldings.length === 0 ? (
+                <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:14,padding:"52px 32px",textAlign:"center"}}>
+                  <div style={{fontSize:40,marginBottom:16,opacity:.25}}>◭</div>
+                  <p style={{color:"var(--muted2)",fontSize:15,fontFamily:"var(--ff-head)",fontWeight:700,marginBottom:8}}>No portfolio connected.</p>
+                  <p style={{color:"var(--muted)",fontSize:13,marginBottom:24}}>Connect Coinbase, CoinSpot, or import a CMC CSV to get AI coaching.</p>
+                  <button onClick={()=>setTab("portfolio")} style={{background:"var(--green)18",border:"1px solid var(--green)40",borderRadius:8,padding:"8px 20px",fontSize:11,color:"var(--green)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em"}}>GO TO PORTFOLIO →</button>
+                </div>
+              ) : coachLoading && !coachReport ? (
+                <div style={{display:"grid",gap:12}}>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:4}}>
+                    {[1,2,3,4].map(i=><div key={i} className="shimmer-el" style={{height:88}}/>)}
+                  </div>
+                  {[1,2,3].map(i=><div key={i} className="shimmer-el" style={{height:72}}/>)}
+                </div>
+              ) : coachError ? (
+                <div style={{background:"#ff525212",border:"1px solid #ff525230",borderRadius:12,padding:"20px 24px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+                  <p style={{fontSize:13,color:"var(--red)"}}>{coachError}</p>
+                  <button onClick={runCoachAnalysis} style={{background:"none",border:"1px solid var(--red)50",borderRadius:8,padding:"6px 14px",fontSize:10,color:"var(--red)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em"}}>TRY AGAIN</button>
+                </div>
+              ) : coachReport ? (() => {
+                const gradeColor = {A:"var(--green)",B:"var(--blue)",C:"var(--amber)",D:"#ff6e40",F:"var(--red)"}[coachReport.grade] || "var(--muted2)";
+                const riskColor  = {AGGRESSIVE:"var(--red)",BALANCED:"var(--amber)",CONSERVATIVE:"var(--green)"}[coachReport.riskProfile] || "var(--muted2)";
+                const snap = buildPortfolioSnapshot(allHoldings, livePrices, audUsd);
+                const topHolding = snap.holdings[0];
+                const priorityColor = {HIGH:"var(--red)",MEDIUM:"var(--amber)",LOW:"var(--green)"};
+                return (
+                  <div className="fi">
+                    {/* Stats strip */}
+                    <div className="fu" style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:20}}>
+                      <div className="stat-card" style={{borderTop:`3px solid ${gradeColor}`}}>
+                        <div style={{fontSize:9,fontFamily:"var(--ff-mono)",color:"var(--muted)",letterSpacing:"0.12em",marginBottom:8}}>PORTFOLIO GRADE</div>
+                        <div style={{fontSize:40,fontFamily:"var(--ff-head)",fontWeight:900,color:gradeColor,lineHeight:1}}>{coachReport.grade}</div>
+                        <div style={{fontSize:10,color:"var(--muted2)",marginTop:6,lineHeight:1.4}}>{coachReport.gradeNote}</div>
+                      </div>
+                      <div className="stat-card" style={{borderTop:`3px solid ${riskColor}`}}>
+                        <div style={{fontSize:9,fontFamily:"var(--ff-mono)",color:"var(--muted)",letterSpacing:"0.12em",marginBottom:8}}>RISK PROFILE</div>
+                        <div style={{fontSize:18,fontFamily:"var(--ff-head)",fontWeight:800,color:riskColor,lineHeight:1,marginBottom:6}}>{coachReport.riskProfile}</div>
+                        <div style={{fontSize:10,color:"var(--muted2)",lineHeight:1.4}}>{coachReport.riskNote}</div>
+                      </div>
+                      <div className="stat-card">
+                        <div style={{fontSize:9,fontFamily:"var(--ff-mono)",color:"var(--muted)",letterSpacing:"0.12em",marginBottom:8}}>TOP HOLDING</div>
+                        {topHolding ? (
+                          <>
+                            <div style={{fontSize:18,fontFamily:"var(--ff-head)",fontWeight:800,color:"var(--text2)",lineHeight:1}}>{topHolding.sym}</div>
+                            <div style={{fontSize:14,fontFamily:"var(--ff-mono)",color:"var(--amber)",marginTop:4}}>{topHolding.pct.toFixed(1)}% of portfolio</div>
+                          </>
+                        ) : <div style={{fontSize:14,color:"var(--muted)"}}>—</div>}
+                      </div>
+                      <div className="stat-card">
+                        <div style={{fontSize:9,fontFamily:"var(--ff-mono)",color:"var(--muted)",letterSpacing:"0.12em",marginBottom:8}}>CRYPTO / STOCKS</div>
+                        <div style={{fontSize:18,fontFamily:"var(--ff-head)",fontWeight:800,color:"var(--text2)",lineHeight:1}}>{snap.cryptoPct.toFixed(0)}% / {snap.stocksPct.toFixed(0)}%</div>
+                        <div style={{marginTop:8,height:6,borderRadius:3,background:"var(--border)",overflow:"hidden"}}>
+                          <div style={{height:"100%",width:`${snap.cryptoPct}%`,background:"var(--purple)",borderRadius:3}}/>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Summary */}
+                    <div className="fu2 card" style={{padding:20,marginBottom:16}}>
+                      <div className="section-label">OVERALL ASSESSMENT</div>
+                      <p style={{fontSize:13,color:"var(--muted2)",lineHeight:1.7,marginBottom:coachReport.outlook?12:0}}>{coachReport.summary}</p>
+                      {coachReport.outlook && <p style={{fontSize:12,color:"var(--muted)",lineHeight:1.6,fontStyle:"italic",borderTop:"1px solid var(--border)",paddingTop:10,marginTop:2}}>{coachReport.outlook}</p>}
+                    </div>
+
+                    {/* Strengths + Weaknesses */}
+                    <div className="fu3" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
+                      <div className="card" style={{padding:18}}>
+                        <div className="section-label">STRENGTHS</div>
+                        {(coachReport.strengths||[]).map((s,i)=>(
+                          <div key={i} style={{display:"flex",gap:8,alignItems:"flex-start",marginBottom:8}}>
+                            <span style={{color:"var(--green)",fontWeight:700,flexShrink:0}}>✓</span>
+                            <span style={{fontSize:12,color:"var(--muted2)",lineHeight:1.5}}>{s}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="card" style={{padding:18}}>
+                        <div className="section-label">WEAKNESSES</div>
+                        {(coachReport.weaknesses||[]).map((w,i)=>(
+                          <div key={i} style={{display:"flex",gap:8,alignItems:"flex-start",marginBottom:8}}>
+                            <span style={{color:"var(--red)",fontWeight:700,flexShrink:0}}>✗</span>
+                            <span style={{fontSize:12,color:"var(--muted2)",lineHeight:1.5}}>{w}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="card" style={{padding:20,marginBottom:16}}>
+                      <div className="section-label">RECOMMENDED ACTIONS</div>
+                      {(coachReport.actions||[]).map((a,i)=>(
+                        <div key={i} style={{display:"flex",gap:12,alignItems:"flex-start",padding:"12px 0",borderBottom:i<(coachReport.actions.length-1)?"1px solid var(--border)":"none"}}>
+                          <span className="badge" style={{background:`${priorityColor[a.priority]||"var(--muted)"}18`,color:priorityColor[a.priority]||"var(--muted2)",border:`1px solid ${priorityColor[a.priority]||"var(--border)"}40`,flexShrink:0}}>{a.priority}</span>
+                          <div>
+                            <div style={{fontSize:13,color:"var(--text2)",fontWeight:600,marginBottom:3}}>{a.action}</div>
+                            <div style={{fontSize:11,color:"var(--muted2)"}}>{a.reason}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Sector breakdown */}
+                    <div className="card" style={{padding:20,marginBottom:16}}>
+                      <div className="section-label">SECTOR BREAKDOWN</div>
+                      {Object.entries(snap.sectorBreakdown).sort((a,b)=>b[1]-a[1]).map(([sector,pct])=>(
+                        <div key={sector} style={{marginBottom:10}}>
+                          <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                            <span style={{fontSize:12,color:"var(--muted2)"}}>{sector}</span>
+                            <span style={{fontSize:12,fontFamily:"var(--ff-mono)",color:"var(--text2)"}}>{pct.toFixed(1)}%</span>
+                          </div>
+                          <div style={{height:6,borderRadius:3,background:"var(--border)",overflow:"hidden"}}>
+                            <div style={{height:"100%",width:`${pct}%`,background:"var(--green)",borderRadius:3,opacity:0.7}}/>
+                          </div>
+                        </div>
+                      ))}
+                      {coachReport.sectorComment && <p style={{fontSize:11,color:"var(--muted)",marginTop:12,lineHeight:1.5,fontStyle:"italic"}}>{coachReport.sectorComment}</p>}
+                    </div>
+
+                    {/* Concentration + Diversification */}
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
+                      {coachReport.concentration && (
+                        <div className="card" style={{padding:18}}>
+                          <div className="section-label">CONCENTRATION RISK</div>
+                          <p style={{fontSize:12,color:"var(--muted2)",lineHeight:1.6}}>{coachReport.concentration}</p>
+                        </div>
+                      )}
+                      {coachReport.diversification && (
+                        <div className="card" style={{padding:18}}>
+                          <div className="section-label">DIVERSIFICATION</div>
+                          <p style={{fontSize:12,color:"var(--muted2)",lineHeight:1.6}}>{coachReport.diversification}</p>
+                        </div>
+                      )}
+                    </div>
+                    {coachReport.cryptoComment && (
+                      <div className="card" style={{padding:18,marginBottom:16}}>
+                        <div className="section-label">CRYPTO ALLOCATION</div>
+                        <p style={{fontSize:12,color:"var(--muted2)",lineHeight:1.6}}>{coachReport.cryptoComment}</p>
+                      </div>
+                    )}
+                  </div>
+                );
+              })() : null}
+            </div>
+          )}
 
           {/* ══ IPO CALENDAR ══ */}
           {tab==="ipo"&&(
