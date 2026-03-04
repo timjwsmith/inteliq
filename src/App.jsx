@@ -753,8 +753,11 @@ function CallCard({ record, currentPriceData, onAnalyse, priceFetching }) {
         {/* Right */}
         <div style={{ display:"flex", gap:20, alignItems:"center", flexShrink:0, flexWrap:"wrap" }}>
           <div style={{ textAlign:"right" }}>
-            <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:3 }}>AGE</div>
+            <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:3 }}>CALLED</div>
             <div style={{ fontFamily:"var(--ff-mono)", fontSize:14, fontWeight:500, color:"var(--text2)" }}>{ageSince(record.calledAt)}</div>
+            <div style={{ fontFamily:"var(--ff-mono)", fontSize:10, color:"var(--muted)", marginTop:2 }}>
+              {new Date(record.calledAt).toLocaleDateString("en-AU", { day:"numeric", month:"short", year:"numeric" })}
+            </div>
           </div>
           <div style={{ textAlign:"right" }}>
             <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:3 }}>CALLED AT</div>
@@ -2852,7 +2855,7 @@ export default function App() {
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap"}}>
                   <div>
                     <h1 style={{fontFamily:"var(--ff-head)",fontSize:26,fontWeight:800,color:"var(--text2)",marginBottom:6}}>AI Track Record</h1>
-                    <p style={{fontSize:13,color:"var(--muted2)"}}>Every verdict the AI has made — with live return tracking.</p>
+                    <p style={{fontSize:13,color:"var(--muted2)"}}>Every verdict the AI has made — with live return tracking. CALLED date shows when the recommendation was first made.</p>
                   </div>
                   {callRecords.length > 0 && (
                     <button onClick={()=>{ if(window.confirm("Clear all call records? This cannot be undone.")) setCallRecords([]); }} style={{background:"#ff525218",border:"1px solid #ff525240",borderRadius:8,padding:"7px 16px",fontSize:10,color:"var(--red)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em"}}>
