@@ -95,6 +95,10 @@ A full-stack React + Express investment dashboard. Live stock/crypto data, AI-po
 - GET  `/api/ipo` — Finnhub IPO calendar (NASDAQ/NYSE/ASX/CBOE, 14d back → 90d ahead), cached 4h; returns `[]` if no `FINNHUB_API_KEY`
 - GET  `/api/dashboard/picks` — AI-generated top 3 picks, cached 4h (`?force=1` to bust)
 - GET  `/health` — server health check (no /api prefix)
+- POST `/api/portfolio/dividends` — FMP key-metrics (dividendYield, dividendPerShare) + historical-dividends; 24h per-symbol cache; crypto skipped
+- GET  `/api/benchmarks` — ^GSPC + ^AXJO 1Y daily OHLCV, returns 1D/1W/1M/3M/1Y returns; 15-min cache
+- POST `/api/portfolio/history` — reconstructs portfolio value series from holdings × historical OHLCV; forward-fills holiday gaps
+- POST `/api/portfolio/risk` — Beta vs ^GSPC, annualised volatility, Sharpe (4.5% rf), max drawdown from 1Y daily OHLCV
 
 ## JSON parsing (all Claude endpoints)
 All Claude responses use `text.slice(text.indexOf("["), text.lastIndexOf("]") + 1)` for arrays
@@ -131,3 +135,16 @@ Implement in this order. Update status as work is completed.
 5. ~~**Macro Event Calendar with Portfolio Impact**~~ — ✅ DONE (PR #12) — Fed/CPI/jobs events with bull/bear cases per holding
 6. ~~**AI Trade Journal**~~ — ✅ DONE (PR #13) — log buy/sell entries, AI identifies behavioural patterns over time
 7. ~~**Watchlist Price Alerts + AI Trigger Conditions**~~ — ✅ DONE (PR #14) — price above/below and daily change % alerts with 60s polling
+
+## Portfolio Professional Upgrade (agreed 2026-03-04)
+Chained branch series — each PR based on the previous feature branch:
+- PR #15 ~~Enhanced SummaryStrip~~ — 8 stats across 2 rows (Total, P&L, Today, Best, Worst / Crypto, Stocks, Positions)
+- PR #16 ~~AllocationPanel~~ — donut chart (HTML5 Canvas), sector bars, top 5 holdings
+- PR #17 ~~Concentration warnings~~ — portWeight label + ⚠ CONCENTRATED badge on HoldingRow ≥20%
+- PR #18 ~~DividendPanel~~ — annual yield%, income, YOC, ex-div date (FMP) — stock holdings only
+- PR #19 ~~BenchmarkStrip~~ — portfolio today % vs S&P500/ASX200 with 1D/1W/1M/3M/1Y toggle
+- PR #20 ~~PortfolioChart~~ — responsive HTML5 Canvas line chart, 1M/3M/1Y ranges
+- PR #21 ~~RiskPanel~~ — Beta, Volatility, Sharpe, Max DD vs ^GSPC
+
+### All Holdings tab panel order (top → bottom):
+SummaryStrip → PortfolioChart → BenchmarkStrip → AllocationPanel → RiskPanel → DividendPanel → Holdings list
