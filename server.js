@@ -870,12 +870,12 @@ app.post("/api/earnings", async (req, res) => {
   const key  = `apikey=${FMP_API_KEY}`;
   const now  = Date.now();
   const TTL  = 6 * 60 * 60 * 1000; // 6h cache per symbol
-  const stockSyms = symbols.filter(s => !COINGECKO_IDS[s.toUpperCase()]);
+  const stockSyms = symbols.map(s => s.sym || s).filter(s => !COINGECKO_IDS[s.toUpperCase()]);
   const toFetch   = stockSyms.filter(s => !earningsCache[s] || now - earningsCache[s].ts > TTL);
 
   if (toFetch.length) {
     const results = await Promise.allSettled(
-      toFetch.map(sym => fetch(`${base}/earnings?symbol=${sym}&limit=8&${key}`).then(r => r.json()))
+      toFetch.map(sym => fetch(`${base}/earnings?symbol=${sym}&limit=5&${key}`).then(r => r.json()))
     );
     results.forEach((r, i) => {
       if (r.status === "fulfilled" && Array.isArray(r.value)) {
