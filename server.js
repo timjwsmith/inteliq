@@ -970,6 +970,108 @@ app.post("/api/portfolio/history", async (req, res) => {
   res.json({ series, changePct: (last - first) / first * 100, first, last });
 });
 
+// ── Portfolio Risk Metrics ─────────────────────────────────────────────────
+app.post("/api/portfolio/risk", async (req, res) => {
+  const { holdings } = req.body;
+  if (!holdings?.length) return res.json(null);
+
+  const audUsd = await getLiveAUDUSD();
+
+  // Fetch 1Y daily OHLCV for all holdings + S&P 500 benchmark in parallel
+  const fetchTargets = [
+    ...holdings.map(h => ({ ...h, isMarket: false })),
+    { sym: "^GSPC", qty: 1, priceCurrency: "USD", isMarket: true },
+  ];
+
+  const results = await Promise.allSettled(
+    fetchTargets.map(async h => {
+      try {
+        const isCrypto = !h.isMarket && !!COINGECKO_IDS[h.sym.toUpperCase()];
+        const yahooSym = isCrypto ? `${h.sym.toUpperCase()}-USD` : h.sym;
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSym)}?interval=1d&range=1y&includePrePost=false`;
+        const r = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
+        const d = await r.json();
+        const result = d?.chart?.result?.[0];
+        if (!result) return null;
+        const timestamps = result.timestamp || [];
+        const closes    = result.indicators?.quote?.[0]?.close || [];
+        const priceCcy  = result.meta?.currency || h.priceCurrency || "USD";
+        const priceByDate = {};
+        timestamps.forEach((ts, i) => {
+          if (closes[i] == null) return;
+          priceByDate[new Date(ts * 1000).toISOString().slice(0, 10)] = closes[i];
+        });
+        return { ...h, priceCcy, priceByDate };
+      } catch { return null; }
+    })
+  );
+
+  const valid       = results.filter(r => r.status === "fulfilled" && r.value).map(r => r.value);
+  const portSyms    = valid.filter(s => !s.isMarket);
+  const marketData  = valid.find(s => s.isMarket);
+  if (!portSyms.length || !marketData) return res.json(null);
+
+  // Build parallel portfolio + market value series (forward-fill)
+  const allDates = new Set();
+  portSyms.forEach(s => Object.keys(s.priceByDate).forEach(d => allDates.add(d)));
+  Object.keys(marketData.priceByDate).forEach(d => allDates.add(d));
+
+  const lastKnown = {};
+  const portVals = [], mktVals = [];
+
+  for (const date of [...allDates].sort()) {
+    for (const s of portSyms) {
+      if (s.priceByDate[date] != null)
+        lastKnown[s.sym] = s.priceCcy === "AUD" ? s.priceByDate[date] * audUsd : s.priceByDate[date];
+    }
+    if (marketData.priceByDate[date] != null) lastKnown["__mkt"] = marketData.priceByDate[date];
+    const pv = portSyms.reduce((a, s) => a + (lastKnown[s.sym] || 0) * s.qty, 0);
+    if (pv > 0 && lastKnown["__mkt"]) { portVals.push(pv); mktVals.push(lastKnown["__mkt"]); }
+  }
+
+  if (portVals.length < 30) return res.json(null);
+
+  // Daily returns
+  const pRet = [], mRet = [];
+  for (let i = 1; i < portVals.length; i++) {
+    pRet.push((portVals[i] - portVals[i - 1]) / portVals[i - 1]);
+    mRet.push((mktVals[i]  - mktVals[i - 1])  / mktVals[i - 1]);
+  }
+
+  const n     = pRet.length;
+  const meanP = pRet.reduce((a, b) => a + b, 0) / n;
+  const meanM = mRet.reduce((a, b) => a + b, 0) / n;
+  const cov   = pRet.reduce((a, r, i) => a + (r - meanP) * (mRet[i] - meanM), 0) / (n - 1);
+  const varM  = mRet.reduce((a, r)    => a + (r - meanM) ** 2,               0) / (n - 1);
+  const beta  = varM > 0 ? cov / varM : null;
+
+  const stdP       = Math.sqrt(pRet.reduce((a, r) => a + (r - meanP) ** 2, 0) / (n - 1));
+  const volatility = stdP * Math.sqrt(252) * 100; // annualised %
+
+  // Annualised return
+  const annReturn = (Math.pow(portVals[portVals.length - 1] / portVals[0], 252 / portVals.length) - 1) * 100;
+
+  // Sharpe (4.5% risk-free)
+  const sharpe = volatility > 0 ? (annReturn / 100 - 0.045) / (volatility / 100) : null;
+
+  // Max drawdown over the period
+  let peak = portVals[0], maxDD = 0;
+  for (const v of portVals) {
+    if (v > peak) peak = v;
+    const dd = (v - peak) / peak;
+    if (dd < maxDD) maxDD = dd;
+  }
+
+  res.json({
+    beta:        beta        != null ? Math.round(beta        * 100) / 100 : null,
+    volatility:  Math.round(volatility  * 10) / 10,
+    sharpe:      sharpe      != null ? Math.round(sharpe      * 100) / 100 : null,
+    maxDrawdown: Math.round(maxDD * 1000) / 10, // negative %
+    annReturn:   Math.round(annReturn   * 10)  / 10,
+    nDays: portVals.length,
+  });
+});
+
 // ── Benchmark comparison (^GSPC, ^AXJO) ───────────────────────────────────
 let benchmarkCache = { data: null, ts: 0 };
 

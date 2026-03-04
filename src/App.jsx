@@ -634,6 +634,106 @@ function BenchmarkStrip({ holdings, livePrices, audUsd }) {
   );
 }
 
+// ── Risk Metrics Panel ──────────────────────────────────────────────────────
+function RiskPanel({ holdings, audUsd }) {
+  const [risk,       setRisk]       = useState(null);
+  const [loading,    setLoading]    = useState(false);
+  const [hasFetched, setHasFetched] = useState(false);
+  const [expanded,   setExpanded]   = useState(true);
+
+  const holdingsKey = holdings.map(h => `${h.sym}:${h.qty}`).join(",");
+
+  useEffect(() => {
+    if (!holdingsKey) return;
+    setLoading(true);
+    setHasFetched(false);
+    const payload = holdings.map(h => ({ sym: h.sym, qty: h.qty, priceCurrency: h.priceCurrency || "USD" }));
+    fetch("/api/portfolio/risk", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ holdings: payload }),
+    })
+      .then(r => r.json()).then(d => setRisk(d)).catch(() => {})
+      .finally(() => { setLoading(false); setHasFetched(true); });
+  }, [holdingsKey]);
+
+  if (!holdingsKey) return null;
+  if (hasFetched && !loading && risk === null) return null;
+
+  const stats = risk ? [
+    {
+      label: "Beta",
+      sub:   "vs S&P 500",
+      value: risk.beta != null ? risk.beta.toFixed(2) : "—",
+      color: risk.beta == null ? "var(--muted)"
+           : risk.beta < 0.8  ? "var(--green)"
+           : risk.beta > 1.2  ? "var(--red)"   : "var(--amber)",
+    },
+    {
+      label: "Volatility",
+      sub:   "annualised",
+      value: risk.volatility != null ? `${risk.volatility.toFixed(1)}%` : "—",
+      color: risk.volatility == null   ? "var(--muted)"
+           : risk.volatility < 15      ? "var(--green)"
+           : risk.volatility > 25      ? "var(--red)"   : "var(--amber)",
+    },
+    {
+      label: "Sharpe",
+      sub:   "4.5% rf",
+      value: risk.sharpe != null ? risk.sharpe.toFixed(2) : "—",
+      color: risk.sharpe == null ? "var(--muted)"
+           : risk.sharpe > 1    ? "var(--green)"
+           : risk.sharpe > 0    ? "var(--amber)" : "var(--red)",
+    },
+    {
+      label: "Max DD",
+      sub:   "1 year",
+      value: risk.maxDrawdown != null ? `${risk.maxDrawdown.toFixed(1)}%` : "—",
+      color: risk.maxDrawdown == null     ? "var(--muted)"
+           : risk.maxDrawdown > -10       ? "var(--green)"
+           : risk.maxDrawdown > -20       ? "var(--amber)" : "var(--red)",
+    },
+  ] : [];
+
+  return (
+    <div style={{ background:"var(--card)", border:"1px solid var(--border)", borderRadius:14, padding:20, marginBottom:24 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom: expanded ? 16 : 0 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+          <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.12em" }}>RISK METRICS</div>
+          {!loading && risk?.nDays && (
+            <span style={{ fontSize:10, color:"var(--muted)", fontFamily:"var(--ff-mono)" }}>{risk.nDays}d data</span>
+          )}
+        </div>
+        <button onClick={() => setExpanded(e => !e)} style={{ background:"none", border:"none", color:"var(--muted)", fontSize:14, padding:"2px 6px", cursor:"pointer" }}>
+          {expanded ? "▾" : "▸"}
+        </button>
+      </div>
+
+      {expanded && (
+        loading ? (
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:12 }}>
+            {[1,2,3,4].map(i => <div key={i} className="shimmer-el" style={{ height:76 }}/>)}
+          </div>
+        ) : stats.length > 0 ? (
+          <>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:12 }}>
+              {stats.map(s => (
+                <div key={s.label} style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:10, padding:"14px 16px" }}>
+                  <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>{s.label}</div>
+                  <div style={{ fontSize:22, fontWeight:800, fontFamily:"var(--ff-mono)", color:s.color, lineHeight:1 }}>{s.value}</div>
+                  <div style={{ fontSize:10, color:"var(--muted)", marginTop:4 }}>{s.sub}</div>
+                </div>
+              ))}
+            </div>
+            <p style={{ fontSize:10, color:"var(--muted)", fontFamily:"var(--ff-mono)", marginTop:10 }}>
+              Beta: sensitivity vs S&P 500 (&lt;1 = lower risk). Sharpe &gt;1 = good risk-adjusted return. Max DD = largest peak-to-trough drop.
+            </p>
+          </>
+        ) : null
+      )}
+    </div>
+  );
+}
+
 function AllocationPanel({ holdings, livePrices, audUsd, displayCcy }) {
   const canvasRef = useRef(null);
 
@@ -2735,6 +2835,7 @@ export default function App() {
                     <div className="fu"><PortfolioChart holdings={allHoldings} displayCcy={displayCcy} audUsd={audUsd}/></div>
                     <div className="fu"><BenchmarkStrip holdings={allHoldings} livePrices={livePrices} audUsd={audUsd}/></div>
                     <div className="fu"><AllocationPanel holdings={allHoldings} livePrices={livePrices} audUsd={audUsd} displayCcy={displayCcy}/></div>
+                    <div className="fu"><RiskPanel holdings={allHoldings} audUsd={audUsd}/></div>
                     <div className="fu"><DividendPanel holdings={allHoldings} livePrices={livePrices} audUsd={audUsd} displayCcy={displayCcy}/></div>
                     <div className="fu2">
                       <div className="section-label">ALL HOLDINGS</div>
