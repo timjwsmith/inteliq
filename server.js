@@ -904,6 +904,45 @@ app.post("/api/earnings", async (req, res) => {
   res.json(out);
 });
 
+// ── Benchmark comparison (^GSPC, ^AXJO) ───────────────────────────────────
+let benchmarkCache = { data: null, ts: 0 };
+
+app.get("/api/benchmarks", async (req, res) => {
+  const now = Date.now();
+  if (benchmarkCache.data && now - benchmarkCache.ts < 15 * 60 * 1000) {
+    return res.json(benchmarkCache.data);
+  }
+  const fetchIndex = async (sym, name) => {
+    try {
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=1y&includePrePost=false`;
+      const r = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
+      const d = await r.json();
+      const result = d?.chart?.result?.[0];
+      if (!result) return null;
+      const closes = (result.indicators?.quote?.[0]?.close || []).filter(c => c != null);
+      if (closes.length < 2) return null;
+      const last = closes[closes.length - 1];
+      const at = n => closes[Math.max(0, closes.length - 1 - n)];
+      return {
+        name,
+        change1d:  last / at(1)   - 1,
+        change1w:  last / at(5)   - 1,
+        change1m:  last / at(21)  - 1,
+        change3m:  last / at(63)  - 1,
+        change1y:  last / at(251) - 1,
+        price: last,
+      };
+    } catch (e) { return null; }
+  };
+  const [sp500, asx200] = await Promise.all([
+    fetchIndex("^GSPC", "S&P 500"),
+    fetchIndex("^AXJO", "ASX 200"),
+  ]);
+  const data = { sp500, asx200 };
+  if (sp500 || asx200) benchmarkCache = { data, ts: now };
+  res.json(data);
+});
+
 // ── Portfolio Dividends ────────────────────────────────────────────────────
 let dividendCache = {};  // keyed by sym, { data, ts }
 
