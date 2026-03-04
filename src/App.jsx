@@ -241,7 +241,7 @@ function linkifyText(text, onTermClick, glossary) {
   const gl = glossary || GLOSSARY;
   const sorted = [...gl].sort((a, b) => b.term.length - a.term.length);
   const escaped = sorted.map(g => g.term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  const regex = new RegExp(`(${escaped.join("|")})`, "gi");
+  const regex = new RegExp(`\\b(${escaped.join("|")})\\b`, "gi");
   const parts = text.split(regex);
   return parts.map((part, i) => {
     const match = gl.find(g => g.term.toLowerCase() === part.toLowerCase());
