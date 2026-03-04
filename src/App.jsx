@@ -140,6 +140,7 @@ const TABS = [
   { id:"earnings",  label:"Earnings",  icon:"◬" },
   { id:"ipo",       label:"IPO",       icon:"◆" },
   { id:"calls",     label:"Calls",     icon:"◐" },
+  { id:"journal",   label:"Journal",   icon:"◫" },
 ];
 
 const PORT_TABS = [
@@ -1304,6 +1305,17 @@ export default function App() {
   const [ipoFilter,  setIpoFilter]  = useState("ALL");
   const [ipoError,   setIpoError]   = useState(null);
 
+  // Trade Journal
+  const [journalEntries,  setJournalEntries]  = useState(() => {
+    try { return JSON.parse(localStorage.getItem("inteliq_journal") || "[]"); } catch { return []; }
+  });
+  const [journalAnalysis, setJournalAnalysis] = useState(null);
+  const [journalAnalysing,setJournalAnalysing]= useState(false);
+  const [journalAnalysisError, setJournalAnalysisError] = useState(null);
+  const [journalForm,     setJournalForm]     = useState({ date: new Date().toISOString().slice(0,10), sym:"", action:"BUY", qty:"", price:"", currency:"USD", thesis:"" });
+  const [journalFormOpen, setJournalFormOpen] = useState(false);
+  const [journalExitForm, setJournalExitForm] = useState(null); // entry id being exited
+
   // Macro Calendar
   const [macroEvents,  setMacroEvents]  = useState([]);
   const [macroLoading, setMacroLoading] = useState(false);
@@ -1390,6 +1402,8 @@ export default function App() {
   useEffect(() => { try { localStorage.setItem("inteliq_watchlist", JSON.stringify(watchlist)); } catch {} }, [watchlist]);
   // Persist call records
   useEffect(() => { try { localStorage.setItem("inteliq_calls", JSON.stringify(callRecords)); } catch {} }, [callRecords]);
+  // Persist journal
+  useEffect(() => { try { localStorage.setItem("inteliq_journal", JSON.stringify(journalEntries)); } catch {} }, [journalEntries]);
 
   // Fetch FX rate on mount
   useEffect(() => {
@@ -1675,6 +1689,17 @@ export default function App() {
       addedAt: new Date().toISOString(),
       note: stock.summary ? stock.summary.slice(0, 100) + (stock.summary.length > 100 ? "…" : "") : "",
     }, ...prev]);
+  }
+
+  async function analyseJournal() {
+    if (journalEntries.length < 3) return;
+    setJournalAnalysing(true); setJournalAnalysisError(null);
+    try {
+      const r = await fetch("/api/journal/analyse", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ entries: journalEntries }) });
+      const d = await r.json();
+      if (d.error) setJournalAnalysisError(d.error); else setJournalAnalysis(d);
+    } catch { setJournalAnalysisError("Analysis failed — please try again."); }
+    setJournalAnalysing(false);
   }
 
   async function runScreener(q) {
@@ -2849,6 +2874,173 @@ export default function App() {
                   </>
                 );
               })()}
+            </div>
+          )}
+
+          {/* ══ TRADE JOURNAL ══ */}
+          {tab==="journal"&&(
+            <div>
+              <div className="fu" style={{marginBottom:24}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap"}}>
+                  <div>
+                    <h1 style={{fontFamily:"var(--ff-head)",fontSize:26,fontWeight:800,color:"var(--text2)",marginBottom:6}}>Trade Journal</h1>
+                    <p style={{fontSize:13,color:"var(--muted2)"}}>Log your trades. AI identifies behavioural patterns over time.</p>
+                  </div>
+                  <div style={{display:"flex",gap:8}}>
+                    {journalEntries.length >= 3 && (
+                      <button onClick={analyseJournal} disabled={journalAnalysing} style={{background:journalAnalysing?"none":"#448aff18",border:`1px solid ${journalAnalysing?"var(--border)":"#448aff40"}`,borderRadius:8,padding:"7px 16px",fontSize:10,color:journalAnalysing?"var(--muted)":"var(--blue)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",opacity:journalAnalysing?.5:1}}>
+                        {journalAnalysing?"◈ ANALYSING…":"◈ ANALYSE PATTERNS"}
+                      </button>
+                    )}
+                    <button onClick={()=>setJournalFormOpen(p=>!p)} style={{background:journalFormOpen?"var(--green)18":"none",border:`1px solid ${journalFormOpen?"var(--green)40":"var(--border)"}`,borderRadius:8,padding:"7px 16px",fontSize:10,color:journalFormOpen?"var(--green)":"var(--muted2)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em"}}>
+                      {journalFormOpen?"✕ CANCEL":"+ LOG TRADE"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Add trade form */}
+              {journalFormOpen && (
+                <div className="fu card" style={{padding:20,marginBottom:20}}>
+                  <div className="section-label">NEW TRADE ENTRY</div>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:12}}>
+                    {[
+                      {label:"DATE",      key:"date",     type:"date",   placeholder:""},
+                      {label:"SYMBOL",    key:"sym",      type:"text",   placeholder:"e.g. NVDA"},
+                      {label:"ACTION",    key:"action",   type:"select", options:["BUY","SELL"]},
+                      {label:"QUANTITY",  key:"qty",      type:"number", placeholder:"10"},
+                      {label:"PRICE",     key:"price",    type:"number", placeholder:"450.00"},
+                      {label:"CURRENCY",  key:"currency", type:"select", options:["USD","AUD"]},
+                    ].map(f=>(
+                      <div key={f.key}>
+                        <div style={{fontSize:9,fontFamily:"var(--ff-mono)",color:"var(--muted)",letterSpacing:"0.1em",marginBottom:5}}>{f.label}</div>
+                        {f.type==="select"
+                          ? <select value={journalForm[f.key]} onChange={e=>setJournalForm(p=>({...p,[f.key]:e.target.value}))} style={{width:"100%",background:"var(--surface)",border:"1px solid var(--border)",borderRadius:8,padding:"9px 12px",color:"var(--text2)",fontSize:13,fontFamily:"var(--ff-mono)"}}>
+                              {f.options.map(o=><option key={o} value={o}>{o}</option>)}
+                            </select>
+                          : <input type={f.type} value={journalForm[f.key]} placeholder={f.placeholder} onChange={e=>setJournalForm(p=>({...p,[f.key]:e.target.value}))} style={{width:"100%",background:"var(--surface)",border:"1px solid var(--border)",borderRadius:8,padding:"9px 12px",color:"var(--text2)",fontSize:13,fontFamily:"var(--ff-mono)"}}/>
+                        }
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{marginBottom:12}}>
+                    <div style={{fontSize:9,fontFamily:"var(--ff-mono)",color:"var(--muted)",letterSpacing:"0.1em",marginBottom:5}}>INVESTMENT THESIS</div>
+                    <textarea value={journalForm.thesis} onChange={e=>setJournalForm(p=>({...p,thesis:e.target.value}))} placeholder="Why are you making this trade? What's the thesis?" rows={2} style={{width:"100%",background:"var(--surface)",border:"1px solid var(--border)",borderRadius:8,padding:"9px 12px",color:"var(--text2)",fontSize:13,fontFamily:"var(--ff-body)",resize:"vertical"}}/>
+                  </div>
+                  <button
+                    onClick={()=>{
+                      const {date,sym,action,qty,price,currency,thesis} = journalForm;
+                      if (!sym.trim() || !qty || !price) return;
+                      const entry = { id:`j-${Date.now()}`, date, sym:sym.toUpperCase().trim(), action, qty:parseFloat(qty), price:parseFloat(price), currency, thesis, loggedAt:new Date().toISOString(), exitDate:null, exitPrice:null };
+                      setJournalEntries(p=>[entry,...p]);
+                      setJournalFormOpen(false);
+                      setJournalForm(p=>({...p,sym:"",qty:"",price:"",thesis:""}));
+                    }}
+                    style={{background:"var(--green)",color:"#0a0a14",border:"none",borderRadius:8,padding:"9px 24px",fontSize:12,fontFamily:"var(--ff-head)",fontWeight:700}}
+                  >
+                    LOG TRADE
+                  </button>
+                </div>
+              )}
+
+              {/* AI Analysis */}
+              {journalAnalysisError && <div style={{background:"#ff525212",border:"1px solid #ff525230",borderRadius:10,padding:"12px 16px",color:"var(--red)",fontSize:12,marginBottom:16}}>{journalAnalysisError}</div>}
+              {journalAnalysis && (
+                <div className="fu2 card" style={{padding:20,marginBottom:20}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+                    <div className="section-label" style={{marginBottom:0}}>AI PATTERN ANALYSIS</div>
+                    <button onClick={()=>setJournalAnalysis(null)} style={{background:"none",border:"none",fontSize:10,color:"var(--muted)",fontFamily:"var(--ff-mono)",cursor:"pointer",letterSpacing:"0.06em"}}>DISMISS</button>
+                  </div>
+                  <p style={{fontSize:13,color:"var(--muted2)",lineHeight:1.7,marginBottom:16}}>{journalAnalysis.summary}</p>
+                  {journalAnalysis.keyAdvice && (
+                    <div style={{background:"var(--blue)12",border:"1px solid var(--blue)30",borderRadius:8,padding:"12px 16px",marginBottom:16}}>
+                      <div style={{fontSize:9,fontFamily:"var(--ff-mono)",color:"var(--blue)",letterSpacing:"0.1em",marginBottom:4}}>KEY ADVICE</div>
+                      <p style={{fontSize:13,color:"var(--text2)",lineHeight:1.6,margin:0,fontWeight:500}}>{journalAnalysis.keyAdvice}</p>
+                    </div>
+                  )}
+                  {journalAnalysis.patterns?.length > 0 && (
+                    <div style={{marginBottom:16}}>
+                      <div className="section-label">BEHAVIOURAL PATTERNS</div>
+                      {journalAnalysis.patterns.map((p,i)=>(
+                        <div key={i} style={{padding:"12px 0",borderBottom:i<journalAnalysis.patterns.length-1?"1px solid var(--border)":"none"}}>
+                          <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:4}}>
+                            <span style={{fontFamily:"var(--ff-head)",fontSize:13,fontWeight:700,color:"var(--text2)"}}>{p.pattern}</span>
+                            <span className="badge" style={{background:({HIGH:"#ff525218",MEDIUM:"#ffab4018",LOW:"#00e67618"})[p.severity]||"var(--surface)",color:({HIGH:"var(--red)",MEDIUM:"var(--amber)",LOW:"var(--green)"})[p.severity]||"var(--muted2)",border:`1px solid ${({HIGH:"#ff525240",MEDIUM:"#ffab4040",LOW:"#00e67640"})[p.severity]||"var(--border)"}`}}>{p.severity}</span>
+                          </div>
+                          <p style={{fontSize:12,color:"var(--muted2)",lineHeight:1.5,marginBottom:6}}>{p.description}</p>
+                          <p style={{fontSize:11,color:"var(--green)",fontFamily:"var(--ff-mono)"}}>{p.advice}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div style={{display:"flex",gap:20,flexWrap:"wrap"}}>
+                    {journalAnalysis.winRate && <div><div style={{fontSize:9,fontFamily:"var(--ff-mono)",color:"var(--muted)",letterSpacing:"0.1em",marginBottom:3}}>WIN RATE</div><div style={{fontSize:16,fontFamily:"var(--ff-head)",fontWeight:700,color:"var(--green)"}}>{journalAnalysis.winRate}</div></div>}
+                    {journalAnalysis.topMistake && <div style={{flex:1,minWidth:200}}><div style={{fontSize:9,fontFamily:"var(--ff-mono)",color:"var(--muted)",letterSpacing:"0.1em",marginBottom:3}}>BIGGEST MISTAKE</div><div style={{fontSize:12,color:"var(--red)"}}>{journalAnalysis.topMistake}</div></div>}
+                  </div>
+                </div>
+              )}
+
+              {/* Entry list */}
+              {journalEntries.length === 0 ? (
+                <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:14,padding:"52px 32px",textAlign:"center"}}>
+                  <div style={{fontSize:40,marginBottom:16,opacity:.25}}>◫</div>
+                  <p style={{color:"var(--muted2)",fontSize:15,fontFamily:"var(--ff-head)",fontWeight:700,marginBottom:8}}>No trades logged yet.</p>
+                  <p style={{color:"var(--muted)",fontSize:13,marginBottom:24}}>Log 3+ trades and AI will identify behavioural patterns — are you holding losers too long? Selling winners too early?</p>
+                  <button onClick={()=>setJournalFormOpen(true)} style={{background:"var(--green)18",border:"1px solid var(--green)40",borderRadius:8,padding:"8px 20px",fontSize:11,color:"var(--green)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em"}}>LOG YOUR FIRST TRADE →</button>
+                </div>
+              ) : (
+                <div>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+                    <div className="section-label" style={{marginBottom:0}}>TRADE LOG ({journalEntries.length})</div>
+                    {journalEntries.length < 3 && <span style={{fontSize:11,color:"var(--muted)",fontFamily:"var(--ff-mono)"}}>Add {3-journalEntries.length} more trade{3-journalEntries.length!==1?"s":""} to unlock pattern analysis</span>}
+                  </div>
+                  {journalEntries.map(e=>{
+                    const isClosed = !!e.exitDate;
+                    const pnlPct = isClosed && e.price && e.exitPrice
+                      ? ((e.exitPrice - e.price) / e.price * 100 * (e.action==="SELL"?-1:1))
+                      : null;
+                    return (
+                      <div key={e.id} className="card" style={{padding:18,marginBottom:10,borderLeft:`3px solid ${e.action==="BUY"?"var(--green)":"var(--red)"}`,opacity:isClosed?0.65:1}}>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap"}}>
+                          <div>
+                            <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:4,flexWrap:"wrap"}}>
+                              <span className="badge" style={{background:e.action==="BUY"?"#00e67618":"#ff525218",color:e.action==="BUY"?"var(--green)":"var(--red)",border:`1px solid ${e.action==="BUY"?"#00e67640":"#ff525240"}`}}>{e.action}</span>
+                              <span style={{fontFamily:"var(--ff-head)",fontSize:15,fontWeight:700,color:"var(--text2)"}}>{e.sym}</span>
+                              <span style={{fontSize:11,fontFamily:"var(--ff-mono)",color:"var(--muted)"}}>{e.date}</span>
+                              {isClosed && <span className="badge" style={{background:"var(--surface)",color:"var(--muted)",border:"1px solid var(--border)"}}>CLOSED</span>}
+                              {pnlPct != null && <span style={{fontSize:11,fontFamily:"var(--ff-mono)",color:pnlPct>=0?"var(--green)":"var(--red)",fontWeight:600}}>{pnlPct>=0?"+":""}{pnlPct.toFixed(1)}%</span>}
+                            </div>
+                            <div style={{fontSize:11,fontFamily:"var(--ff-mono)",color:"var(--muted2)"}}>
+                              {e.qty} × {e.currency}{e.price}
+                              {isClosed && ` → ${e.currency}${e.exitPrice} (${e.exitDate})`}
+                            </div>
+                            {e.thesis && <p style={{fontSize:11,color:"var(--muted)",marginTop:6,fontStyle:"italic",lineHeight:1.4}}>{e.thesis}</p>}
+                          </div>
+                          <div style={{display:"flex",gap:6,flexShrink:0}}>
+                            {!isClosed && (
+                              journalExitForm===e.id ? (
+                                <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                                  <input type="number" placeholder="Exit price" id={`exit-${e.id}`} style={{width:100,background:"var(--surface)",border:"1px solid var(--border)",borderRadius:6,padding:"5px 8px",color:"var(--text2)",fontSize:12,fontFamily:"var(--ff-mono)"}}/>
+                                  <button onClick={()=>{
+                                    const ep = parseFloat(document.getElementById(`exit-${e.id}`)?.value);
+                                    if (!ep) return;
+                                    setJournalEntries(p=>p.map(x=>x.id===e.id?{...x,exitDate:new Date().toISOString().slice(0,10),exitPrice:ep}:x));
+                                    setJournalExitForm(null);
+                                  }} style={{background:"var(--green)",color:"#0a0a14",border:"none",borderRadius:6,padding:"5px 12px",fontSize:10,fontFamily:"var(--ff-mono)",fontWeight:700}}>CLOSE</button>
+                                  <button onClick={()=>setJournalExitForm(null)} style={{background:"none",border:"1px solid var(--border)",borderRadius:6,padding:"5px 10px",fontSize:10,color:"var(--muted)",fontFamily:"var(--ff-mono)"}}>✕</button>
+                                </div>
+                              ) : (
+                                <button onClick={()=>setJournalExitForm(e.id)} style={{background:"none",border:"1px solid var(--border)",borderRadius:6,padding:"5px 12px",fontSize:10,color:"var(--muted2)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em"}}>CLOSE TRADE</button>
+                              )
+                            )}
+                            <button onClick={()=>setJournalEntries(p=>p.filter(x=>x.id!==e.id))} style={{background:"#ff525212",border:"1px solid #ff525230",borderRadius:6,padding:"5px 10px",fontSize:10,color:"var(--red)",fontFamily:"var(--ff-mono)"}}>✕</button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 
