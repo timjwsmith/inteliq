@@ -381,6 +381,175 @@ const SECTOR_COLOURS = [
   "#ff9800","#9c27b0","#f06292","#26c6da","#d4e157",
 ];
 
+// ── Portfolio Performance Chart ─────────────────────────────────────────────
+function PortfolioChart({ holdings, displayCcy, audUsd }) {
+  const canvasRef    = useRef(null);
+  const containerRef = useRef(null);
+  const [canvasW,  setCanvasW]  = useState(0);
+  const [history,  setHistory]  = useState(null);
+  const [loading,  setLoading]  = useState(false);
+  const [range,    setRange]    = useState("1m");
+  const [expanded, setExpanded] = useState(true);
+
+  // Track container width for responsive canvas
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const obs = new ResizeObserver(() => setCanvasW(el.clientWidth));
+    obs.observe(el);
+    setCanvasW(el.clientWidth);
+    return () => obs.disconnect();
+  }, []);
+
+  const holdingsKey = holdings.map(h => `${h.sym}:${h.qty}`).join(",");
+
+  useEffect(() => {
+    if (!holdingsKey) return;
+    setLoading(true);
+    setHistory(null);
+    const payload = holdings.map(h => ({ sym: h.sym, qty: h.qty, priceCurrency: h.priceCurrency || "USD" }));
+    fetch("/api/portfolio/history", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ holdings: payload, range }),
+    })
+      .then(r => r.json()).then(d => setHistory(d)).catch(() => {})
+      .finally(() => setLoading(false));
+  }, [holdingsKey, range]);
+
+  // Draw line chart
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !history?.series?.length || !canvasW || loading) return;
+
+    const series = history.series.map(d => ({
+      t: d.t,
+      v: displayCcy === "AUD" ? d.v / audUsd : d.v,
+    }));
+
+    const isUp  = series[series.length - 1].v >= series[0].v;
+    const W = canvasW, H = 200;
+    const PAD = { t: 16, r: 16, b: 36, l: 72 };
+    canvas.width = W; canvas.height = H;
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, W, H);
+
+    const vals  = series.map(d => d.v);
+    const minV  = Math.min(...vals), maxV = Math.max(...vals);
+    const vPad  = (maxV - minV) * 0.12 || maxV * 0.05 || 1;
+    const vLow  = minV - vPad, vHigh = maxV + vPad;
+    const vSpan = vHigh - vLow;
+    const CW = W - PAD.l - PAD.r;
+    const CH = H - PAD.t - PAD.b;
+
+    const xS = i => PAD.l + (i / Math.max(series.length - 1, 1)) * CW;
+    const yS = v => PAD.t + (1 - (v - vLow) / vSpan) * CH;
+
+    const lineColor = isUp ? "#00e676" : "#ff5252";
+
+    // Gradient fill below line
+    const grad = ctx.createLinearGradient(0, PAD.t, 0, PAD.t + CH);
+    grad.addColorStop(0, isUp ? "#00e67628" : "#ff525228");
+    grad.addColorStop(1, "transparent");
+    ctx.beginPath();
+    series.forEach((d, i) => i === 0 ? ctx.moveTo(xS(i), yS(d.v)) : ctx.lineTo(xS(i), yS(d.v)));
+    ctx.lineTo(xS(series.length - 1), PAD.t + CH);
+    ctx.lineTo(PAD.l, PAD.t + CH);
+    ctx.closePath();
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // Y gridlines + labels
+    ctx.font = "11px 'DM Mono',monospace";
+    ctx.textAlign = "right";
+    const yTicks = 4;
+    for (let i = 0; i <= yTicks; i++) {
+      const v = vLow + (i / yTicks) * vSpan;
+      const y = yS(v);
+      ctx.strokeStyle = "#332e5025"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(PAD.l, y); ctx.lineTo(W - PAD.r, y); ctx.stroke();
+      ctx.fillStyle = "#7b7599";
+      ctx.fillText(fmtMoney(v, displayCcy), PAD.l - 5, y + 4);
+    }
+
+    // X-axis date labels (3 evenly spaced)
+    ctx.textAlign = "center"; ctx.fillStyle = "#7b7599";
+    [0, Math.floor((series.length - 1) / 2), series.length - 1].forEach(i => {
+      if (!series[i]) return;
+      const label = new Date(series[i].t).toLocaleDateString("en-AU", { day:"numeric", month:"short" });
+      ctx.fillText(label, xS(i), H - PAD.b + 14);
+    });
+
+    // Line
+    ctx.beginPath();
+    series.forEach((d, i) => i === 0 ? ctx.moveTo(xS(i), yS(d.v)) : ctx.lineTo(xS(i), yS(d.v)));
+    ctx.strokeStyle = lineColor; ctx.lineWidth = 2; ctx.lineJoin = "round";
+    ctx.stroke();
+
+    // Latest value dot
+    const li = series.length - 1;
+    ctx.beginPath(); ctx.arc(xS(li), yS(series[li].v), 4, 0, 2 * Math.PI);
+    ctx.fillStyle = lineColor; ctx.fill();
+  }, [history, displayCcy, audUsd, canvasW, loading]);
+
+  if (!holdingsKey) return null;
+
+  const changePct = history?.changePct;
+  const first = history?.first != null ? (displayCcy === "AUD" ? history.first / audUsd : history.first) : null;
+  const last  = history?.last  != null ? (displayCcy === "AUD" ? history.last  / audUsd : history.last)  : null;
+
+  return (
+    <div style={{ background:"var(--card)", border:"1px solid var(--border)", borderRadius:14, padding:20, marginBottom:24 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom: expanded ? 16 : 0 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+          <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.12em" }}>PORTFOLIO PERFORMANCE</div>
+          {!loading && changePct != null && (
+            <span style={{ fontSize:13, fontWeight:700, fontFamily:"var(--ff-mono)",
+              color: changePct >= 0 ? "var(--green)" : "var(--red)" }}>
+              {changePct >= 0 ? "+" : ""}{changePct.toFixed(2)}%
+            </span>
+          )}
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+          <div className="pill-toggle">
+            {["1m","3m","1y"].map(r => (
+              <button key={r} onClick={() => setRange(r)} className={range === r ? "active" : ""}>{r.toUpperCase()}</button>
+            ))}
+          </div>
+          <button onClick={() => setExpanded(e => !e)} style={{ background:"none", border:"none", color:"var(--muted)", fontSize:14, padding:"2px 6px", cursor:"pointer" }}>
+            {expanded ? "▾" : "▸"}
+          </button>
+        </div>
+      </div>
+
+      {expanded && (
+        <div ref={containerRef}>
+          {loading ? (
+            <div className="shimmer-el" style={{ height:200, borderRadius:8 }}/>
+          ) : !history?.series?.length ? (
+            <p style={{ fontSize:12, color:"var(--muted)", textAlign:"center", padding:"24px 0" }}>
+              No price history available for your holdings.
+            </p>
+          ) : (
+            <div style={{ position:"relative" }}>
+              <canvas ref={canvasRef} style={{ width:"100%", height:200, display:"block" }}/>
+              {first != null && last != null && (
+                <div style={{ display:"flex", justifyContent:"space-between", marginTop:4, paddingLeft:72, paddingRight:16 }}>
+                  <span style={{ fontSize:10, color:"var(--muted)", fontFamily:"var(--ff-mono)" }}>
+                    Start: {fmtMoney(first, displayCcy)}
+                  </span>
+                  <span style={{ fontSize:10, color:"var(--muted)", fontFamily:"var(--ff-mono)" }}>
+                    Now: {fmtMoney(last, displayCcy)}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Benchmark Strip ─────────────────────────────────────────────────────────
 function BenchmarkStrip({ holdings, livePrices, audUsd }) {
   const [benchmarks, setBenchmarks] = useState(null);
@@ -2563,6 +2732,7 @@ export default function App() {
                 allHoldings.length>0 ? (
                   <>
                     <div className="fu"><SummaryStrip holdings={allHoldings} livePrices={livePrices} displayCcy={displayCcy} audUsd={audUsd}/></div>
+                    <div className="fu"><PortfolioChart holdings={allHoldings} displayCcy={displayCcy} audUsd={audUsd}/></div>
                     <div className="fu"><BenchmarkStrip holdings={allHoldings} livePrices={livePrices} audUsd={audUsd}/></div>
                     <div className="fu"><AllocationPanel holdings={allHoldings} livePrices={livePrices} audUsd={audUsd} displayCcy={displayCcy}/></div>
                     <div className="fu"><DividendPanel holdings={allHoldings} livePrices={livePrices} audUsd={audUsd} displayCcy={displayCcy}/></div>

@@ -904,6 +904,72 @@ app.post("/api/earnings", async (req, res) => {
   res.json(out);
 });
 
+// ── Portfolio Performance History ──────────────────────────────────────────
+app.post("/api/portfolio/history", async (req, res) => {
+  const { holdings, range } = req.body;
+  if (!holdings?.length) return res.json({ series: [] });
+
+  const audUsd = await getLiveAUDUSD();
+  const YAHOO_RANGE = { "1m":"1mo", "3m":"3mo", "1y":"1y" };
+  const yahooRange = YAHOO_RANGE[range] || "1mo";
+
+  // Fetch daily OHLCV for every symbol in parallel
+  const results = await Promise.allSettled(
+    holdings.map(async h => {
+      try {
+        const isCrypto = !!COINGECKO_IDS[h.sym.toUpperCase()];
+        const yahooSym = isCrypto ? `${h.sym.toUpperCase()}-USD` : h.sym;
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSym)}?interval=1d&range=${yahooRange}&includePrePost=false`;
+        const r = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
+        const d = await r.json();
+        const result = d?.chart?.result?.[0];
+        if (!result) return null;
+        const timestamps = result.timestamp || [];
+        const closes    = result.indicators?.quote?.[0]?.close || [];
+        const priceCcy  = result.meta?.currency || h.priceCurrency || "USD";
+        // Map date string → close price
+        const priceByDate = {};
+        timestamps.forEach((ts, i) => {
+          if (closes[i] == null) return;
+          const date = new Date(ts * 1000).toISOString().slice(0, 10);
+          priceByDate[date] = closes[i];
+        });
+        return { sym: h.sym, qty: h.qty, priceCcy, priceByDate };
+      } catch (e) { return null; }
+    })
+  );
+
+  const valid = results.filter(r => r.status === "fulfilled" && r.value).map(r => r.value);
+  if (!valid.length) return res.json({ series: [] });
+
+  // Find latest "first date" so we only include days when all symbols have data
+  const firstDatePerSym = valid.map(s => Object.keys(s.priceByDate).sort()[0]).filter(Boolean);
+  const startDate = firstDatePerSym.length ? firstDatePerSym.reduce((a, b) => a > b ? a : b) : null;
+
+  // Collect all dates, filtered to common start
+  const allDates = new Set();
+  valid.forEach(s => Object.keys(s.priceByDate).forEach(d => { if (!startDate || d >= startDate) allDates.add(d); }));
+  const sortedDates = [...allDates].sort();
+
+  // Build series: forward-fill each symbol's price, sum across portfolio
+  const series = [];
+  const lastKnown = {}; // sym → priceUSD
+  for (const date of sortedDates) {
+    for (const s of valid) {
+      const price = s.priceByDate[date];
+      if (price != null) {
+        lastKnown[s.sym] = s.priceCcy === "AUD" ? price * audUsd : price;
+      }
+    }
+    const dayVal = valid.reduce((acc, s) => acc + (lastKnown[s.sym] || 0) * s.qty, 0);
+    if (dayVal > 0) series.push({ t: new Date(date + "T00:00:00Z").getTime(), v: dayVal });
+  }
+
+  if (series.length < 2) return res.json({ series: [] });
+  const first = series[0].v, last = series[series.length - 1].v;
+  res.json({ series, changePct: (last - first) / first * 100, first, last });
+});
+
 // ── Benchmark comparison (^GSPC, ^AXJO) ───────────────────────────────────
 let benchmarkCache = { data: null, ts: 0 };
 
