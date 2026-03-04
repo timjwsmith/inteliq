@@ -721,6 +721,15 @@ Rules: ASX tickers must end in .AX. Use standard crypto symbols (BTC, ETH, SOL e
     if (start === -1 || end === -1) throw new Error("No JSON array found in response");
     const parsed = JSON.parse(text.slice(start, end + 1));
     if (!Array.isArray(parsed) || parsed.length === 0) throw new Error("Invalid response format");
+    // Fetch live prices and replace Claude's priceStatic estimates
+    await Promise.allSettled(parsed.map(async pick => {
+      try {
+        const result = pick.priceType === "crypto"
+          ? await fetchCryptoPrice(pick.sym)
+          : await fetchStockPrice(pick.sym);
+        if (result?.price) pick.priceStatic = result.price;
+      } catch {}
+    }));
     dashCache = { picks: parsed, ts: now };
     console.log(`Dashboard: generated ${parsed.length} picks`);
     res.json(parsed);
