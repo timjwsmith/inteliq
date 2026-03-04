@@ -691,7 +691,7 @@ function IpoCard({ ipo, onAnalyse }) {
 }
 
 // ── Call Card ──────────────────────────────────────────────────────────────
-function CallCard({ record, currentPriceData, onAnalyse, priceFetching }) {
+function CallCard({ record, currentPriceData, onAnalyse, onRemove, priceFetching }) {
   const verdictAccent = { BUY:"var(--green)", WATCH:"var(--amber)", AVOID:"var(--red)", HOLD:"var(--muted2)", SELL:"var(--red)" };
   const accent = verdictAccent[record.verdict] || "var(--muted2)";
   const sourceColor = record.source === "explorer" ? "var(--blue)" : "var(--purple)";
@@ -785,6 +785,9 @@ function CallCard({ record, currentPriceData, onAnalyse, priceFetching }) {
           </div>
           <button onClick={() => onAnalyse(record.sym)} style={{ background:"none", border:"1px solid var(--border)", borderRadius:8, padding:"7px 14px", fontSize:10, color:"var(--muted2)", fontFamily:"var(--ff-mono)", letterSpacing:"0.06em", whiteSpace:"nowrap" }}>
             ANALYSE →
+          </button>
+          <button onClick={() => onRemove(record.sym)} title="Remove this call record" style={{ background:"none", border:"1px solid var(--border)", borderRadius:8, padding:"7px 10px", fontSize:12, color:"var(--muted)", fontFamily:"var(--ff-mono)", lineHeight:1 }}>
+            ✕
           </button>
         </div>
       </div>
@@ -1827,10 +1830,9 @@ export default function App() {
   }
 
   function recordCall(parsed, source) {
-    const SIX_HOURS = 6 * 60 * 60 * 1000;
     setCallRecords(prev => {
-      const recent = prev.find(c => c.sym === parsed.sym && (Date.now() - new Date(c.calledAt).getTime()) < SIX_HOURS);
-      if (recent) return prev;
+      // Never overwrite an existing record — preserve the original call date and entry price
+      if (prev.find(c => c.sym === parsed.sym)) return prev;
       const record = {
         id: `${parsed.sym}-${Date.now()}`,
         sym: parsed.sym,           name: parsed.name || parsed.sym,
@@ -2956,6 +2958,7 @@ export default function App() {
                             currentPriceData={callsPrices[c.sym]}
                             priceFetching={callsPriceFetching}
                             onAnalyse={sym => { setTab("explorer"); handleSearch(sym); }}
+                            onRemove={sym => setCallRecords(prev => prev.filter(x => x.sym !== sym))}
                           />
                         ))}
                       </div>
