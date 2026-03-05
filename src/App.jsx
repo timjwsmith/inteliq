@@ -1865,10 +1865,10 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
 // ── Trade Modal ─────────────────────────────────────────────────────────────
 function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
   const { sym, name } = config;
-  const exchange = config.exchange || "coinbase";
+  const [exchange, setExchange] = useState(config.exchange || null);
   const isBinance = exchange === "binance";
-  const tradeCcy = isBinance ? "AUD" : (displayCcy === "AUD" ? "AUD" : "USD");
-  const ccySymbol = tradeCcy === "AUD" ? "A$" : "$";
+  const tradeCcy = "USD";
+  const ccySymbol = "$";
 
   const [side, setSide] = useState(config.side || "BUY");
   const [step, setStep] = useState(1);
@@ -1879,33 +1879,64 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
   const [livePrice, setLivePrice] = useState(null);
   const [result, setResult] = useState(null);
   const [placing, setPlacing] = useState(false);
+  const [bnTicker, setBnTicker] = useState(null);
 
+  // Fetch prices from both exchanges for comparison
   useEffect(() => {
+    fetch(`/api/binance/ticker/${sym}`)
+      .then(r => r.json())
+      .then(d => { if (d.price) setBnTicker(d); })
+      .catch(() => {});
+    fetch(`/api/chart/${sym}?range=1d`)
+      .then(r => r.json())
+      .then(d => { if (d.currentPrice) setLivePrice(d.currentPrice); })
+      .catch(() => {});
+  }, [sym]);
+
+  // Fetch balance when exchange changes
+  useEffect(() => {
+    if (!exchange) return;
+    setAvailBal(null); setUsdcBal(null);
     if (isBinance) {
-      fetch("/api/binance/aud-balance")
+      fetch("/api/binance/usdt-balance")
         .then(r => r.json())
         .then(d => { setAvailBal(d.available ?? null); })
         .catch(() => setAvailBal(null));
     } else {
       fetch("/api/coinbase/usd-balance")
         .then(r => r.json())
-        .then(d => { setAvailBal(tradeCcy === "AUD" ? (d.availableAUD ?? null) : (d.available ?? null)); setUsdcBal(d.availableUSDC ?? null); })
+        .then(d => { setAvailBal(d.available ?? null); setUsdcBal(d.availableUSDC ?? null); })
         .catch(() => setAvailBal(null));
     }
-    fetch(`/api/chart?sym=${sym}&range=1d&type=crypto`)
-      .then(r => r.json())
-      .then(d => { if (d.currentPrice) setLivePrice(d.currentPrice); })
-      .catch(() => {});
-  }, [sym, tradeCcy, isBinance]);
+  }, [exchange, isBinance]);
 
-  // livePrice from chart is in USD; convert for display
-  const livePriceDisplay = livePrice != null
-    ? (tradeCcy === "AUD" ? livePrice / 0.635 : livePrice)  // rough conversion for estimate only
-    : null;
+  // Auto-select cheaper exchange when none specified
+  useEffect(() => {
+    if (exchange) return;
+    if (bnTicker && livePrice) {
+      const bnEff = bnTicker.price * 1.001;
+      const cbEff = livePrice * 1.006;
+      setExchange(bnEff <= cbEff ? "binance" : "coinbase");
+    } else if (bnTicker && !livePrice) {
+      setExchange("binance");
+    } else if (!bnTicker && livePrice) {
+      setExchange("coinbase");
+    }
+  }, [bnTicker, livePrice, exchange]);
+
+  // Determine which exchange is cheaper (for badge)
+  const cheaper = (() => {
+    if (!bnTicker?.price || !livePrice) return null;
+    const bnEff = bnTicker.price * 1.001;  // 0.10% fee
+    const cbEff = livePrice * 1.006;       // 0.60% fee
+    return side === "BUY" ? (bnEff <= cbEff ? "binance" : "coinbase") : (bnEff >= cbEff ? "binance" : "coinbase");
+  })();
+
+  const livePriceDisplay = isBinance && bnTicker?.price ? bnTicker.price : livePrice;
   const estQty = side === "BUY" && livePriceDisplay && parseFloat(quoteAmount) > 0
     ? (parseFloat(quoteAmount) / livePriceDisplay).toFixed(6) : null;
 
-  const canReview = side === "BUY" ? !!parseFloat(quoteAmount) : !!parseFloat(cryptoQty);
+  const canReview = exchange && (side === "BUY" ? !!parseFloat(quoteAmount) : !!parseFloat(cryptoQty));
 
   async function placeOrder() {
     setPlacing(true);
@@ -1969,7 +2000,7 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:22 }}>
           <div>
             <h2 style={{ fontFamily:"var(--ff-head)", fontSize:20, fontWeight:800, color:"var(--text2)", margin:0 }}>Trade {sym}</h2>
-            <p style={{ fontSize:11, color:"var(--muted)", fontFamily:"var(--ff-mono)", margin:"4px 0 0", letterSpacing:"0.06em" }}>{name} · {isBinance ? "Binance" : "Coinbase"} · {sym}/{tradeCcy}</p>
+            <p style={{ fontSize:11, color:"var(--muted)", fontFamily:"var(--ff-mono)", margin:"4px 0 0", letterSpacing:"0.06em" }}>{name} · {exchange ? (isBinance ? "Binance" : "Coinbase") : "Select exchange"} · {sym}/{tradeCcy}</p>
           </div>
           <button onClick={onClose} style={{ background:"none", border:"none", color:"var(--muted2)", fontSize:20, cursor:"pointer", lineHeight:1 }}>✕</button>
         </div>
@@ -1980,6 +2011,33 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
 
         {step === 1 && (
           <>
+            <div style={{ marginBottom:18 }}>
+              <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>EXCHANGE</div>
+              <div style={{ display:"flex", gap:8 }}>
+                {[
+                  { id:"coinbase", label:"Coinbase", color:"var(--amber)", price:livePrice, fee:"0.60" },
+                  { id:"binance", label:"Binance", color:"#F0B90B", price:bnTicker?.price, fee:"0.10" },
+                ].map(ex => {
+                  const isActive = exchange === ex.id;
+                  const isCheaper = cheaper === ex.id;
+                  const priceStr = ex.price ? `$${ex.price.toLocaleString("en",{maximumFractionDigits:2})}` : "—";
+                  return (
+                    <button key={ex.id} onClick={() => setExchange(ex.id)} style={{
+                      flex:1, background:isActive?`${ex.color}18`:"var(--card)",
+                      border:`1px solid ${isActive?`${ex.color}60`:"var(--border)"}`,
+                      borderRadius:10, padding:"10px 14px", cursor:"pointer", textAlign:"left", position:"relative"
+                    }}>
+                      <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:4 }}>
+                        <span style={{ fontSize:11, fontWeight:700, color:isActive?ex.color:"var(--muted2)", fontFamily:"var(--ff-head)" }}>{ex.label}</span>
+                        {isCheaper && <span style={{ fontSize:8, fontFamily:"var(--ff-mono)", color:"var(--green)", background:"#00e67618", border:"1px solid #00e67640", borderRadius:4, padding:"1px 5px", letterSpacing:"0.06em" }}>CHEAPER</span>}
+                      </div>
+                      <div style={{ fontSize:14, fontFamily:"var(--ff-mono)", color:"var(--text2)", fontWeight:600, marginBottom:2 }}>{priceStr}</div>
+                      <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em" }}>FEE: {ex.fee}%</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
             <div style={{ display:"flex", gap:8, marginBottom:18 }}>
               {["BUY","SELL"].map(s => (
                 <button key={s} onClick={() => setSide(s)} style={{ ...btnBase, flex:1,
@@ -1991,9 +2049,9 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
               ))}
             </div>
             <div style={{ marginBottom:18 }}>
-              <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>{tradeCcy} AVAILABLE</div>
+              <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>{isBinance ? "USDT" : "USD"} AVAILABLE</div>
               <div style={{ fontSize:16, fontFamily:"var(--ff-mono)", color:"var(--text2)", fontWeight:600 }}>
-                {availBal != null ? `${ccySymbol}${availBal.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}` : "Loading…"}
+                {!exchange ? "—" : availBal != null ? `${ccySymbol}${availBal.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}` : "Loading…"}
               </div>
               {!isBinance && usdcBal != null && <div style={{ fontSize:10, fontFamily:"var(--ff-mono)", color:"var(--muted)", marginTop:4 }}>
                 USDC: ${usdcBal.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}
@@ -2006,7 +2064,7 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
             )}
             {side === "BUY" && isBinance && availBal != null && availBal <= 0 && (
               <div style={{ background:"#ffab4010", border:"1px solid #ffab4040", borderRadius:10, padding:"10px 14px", fontSize:11, color:"var(--amber)", marginBottom:18, lineHeight:1.5 }}>
-                No AUD available. Deposit AUD to your Binance account to start trading.
+                No USDT available. Deposit or buy USDT on Binance to start trading.
               </div>
             )}
             {side === "BUY" && (
@@ -2033,6 +2091,7 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
           <>
             <div style={{ background:"var(--card)", border:"1px solid var(--border)", borderRadius:12, padding:"18px 20px", marginBottom:20 }}>
               {[
+                { l:"EXCHANGE", v:isBinance ? "Binance" : "Coinbase" },
                 { l:"ASSET", v:sym },
                 { l:"SIDE", v:side },
                 side === "BUY" && { l:"SPEND", v:`${ccySymbol}${parseFloat(quoteAmount).toFixed(2)} ${tradeCcy}` },
@@ -2074,7 +2133,7 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
                 </>
               )}
             </div>
-            <button onClick={() => { result.ok ? onSuccess() : onClose(); }}
+            <button onClick={() => { result.ok ? onSuccess(exchange) : onClose(); }}
               style={{ ...btnBase, width:"100%", background: result.ok ? "var(--green)" : "var(--card)", color: result.ok ? "#0a0a14" : "var(--muted2)", border: result.ok ? "none" : "1px solid var(--border)" }}>
               DONE
             </button>
@@ -4244,7 +4303,7 @@ export default function App() {
         </main>
       </div>
       {tradeModal && (
-        <TradeModal config={tradeModal} onClose={()=>setTradeModal(null)} onSuccess={()=>{setTradeModal(null);tradeModal.exchange==="binance"?syncBinance():syncCoinbase();}} displayCcy={displayCcy} audUsd={audUsd} />
+        <TradeModal config={tradeModal} onClose={()=>setTradeModal(null)} onSuccess={(ex)=>{setTradeModal(null);ex==="binance"?syncBinance():syncCoinbase();}} displayCcy={displayCcy} audUsd={audUsd} />
       )}
       <GlossaryModal open={glossaryOpen} onClose={()=>setGlossaryOpen(false)} focusTerm={glossaryTerm} allGlossary={allGlossary}/>
     </>

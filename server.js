@@ -326,34 +326,22 @@ app.get("/api/binance/balances", async (req, res) => {
     for (const b of nonZero) {
       if (stablecoins.includes(b.asset)) continue;
       try {
-        const trades = await binanceFetch("GET", "/api/v3/myTrades", { symbol: `${b.asset}AUD`, limit: 500 });
+        const trades = await binanceFetch("GET", "/api/v3/myTrades", { symbol: `${b.asset}USDT`, limit: 500 });
         const buys = trades.filter(t => t.isBuyer);
         if (buys.length > 0) {
           const totalQty = buys.reduce((s, t) => s + parseFloat(t.qty), 0);
           const totalCost = buys.reduce((s, t) => s + parseFloat(t.qty) * parseFloat(t.price), 0);
           costBasis[b.asset] = totalQty > 0 ? totalCost / totalQty : 0;
         }
-      } catch {
-        // No AUD pair trades — try USDT pair
-        try {
-          const trades = await binanceFetch("GET", "/api/v3/myTrades", { symbol: `${b.asset}USDT`, limit: 500 });
-          const buys = trades.filter(t => t.isBuyer);
-          if (buys.length > 0) {
-            const totalQty = buys.reduce((s, t) => s + parseFloat(t.qty), 0);
-            const totalCost = buys.reduce((s, t) => s + parseFloat(t.qty) * parseFloat(t.price), 0);
-            costBasis[b.asset] = { avg: totalQty > 0 ? totalCost / totalQty : 0, ccy: "USD" };
-          }
-        } catch {}
-      }
+      } catch {}
     }
 
     const holdings = nonZero
       .filter(b => !stablecoins.includes(b.asset))
       .map(b => {
         const qty = parseFloat(b.free) + parseFloat(b.locked);
-        const cb = costBasis[b.asset];
-        const avg = cb ? (typeof cb === "object" ? cb.avg : cb) : 0;
-        const avgCurrency = cb && typeof cb === "object" ? cb.ccy : "AUD";
+        const avg = costBasis[b.asset] || 0;
+        const avgCurrency = "USD";
         return {
           sym: b.asset, name: b.asset, qty,
           avg, avgCurrency,
@@ -368,14 +356,14 @@ app.get("/api/binance/balances", async (req, res) => {
   }
 });
 
-app.get("/api/binance/aud-balance", async (req, res) => {
+app.get("/api/binance/usdt-balance", async (req, res) => {
   if (!BINANCE_API_KEY || !BINANCE_API_SECRET) {
     return res.status(503).json({ error: "Binance API keys not configured" });
   }
   try {
     const account = await binanceFetch("GET", "/api/v3/account");
-    const aud = (account.balances || []).find(b => b.asset === "AUD");
-    const available = aud ? parseFloat(aud.free) : 0;
+    const usdt = (account.balances || []).find(b => b.asset === "USDT");
+    const available = usdt ? parseFloat(usdt.free) : 0;
     res.json({ available });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -389,21 +377,12 @@ app.post("/api/binance/order", async (req, res) => {
   const { sym: rawSym, side, quoteAmount, qty } = req.body;
   const sym = rawSym.replace(/-(?:AUD|USD|USDC|USDT)$/i, "").toUpperCase();
   try {
-    // Try AUD pair first, fall back to USDT
-    let symbol = `${sym}AUD`;
-    let pairFound = false;
-    try {
-      const info = await fetch(`https://api.binance.com/api/v3/exchangeInfo?symbol=${symbol}`);
-      const d = await info.json();
-      if (d.symbols && d.symbols.length > 0 && d.symbols[0].status === "TRADING") pairFound = true;
-    } catch {}
-    if (!pairFound) {
-      symbol = `${sym}USDT`;
-      const info = await fetch(`https://api.binance.com/api/v3/exchangeInfo?symbol=${symbol}`);
-      const d = await info.json();
-      if (!d.symbols || d.symbols.length === 0 || d.symbols[0].status !== "TRADING") {
-        return res.status(400).json({ error: `No trading pair found for ${sym}` });
-      }
+    // Use USDT pair (AUD pairs on Binance have no liquidity)
+    const symbol = `${sym}USDT`;
+    const info = await fetch(`https://api.binance.com/api/v3/exchangeInfo?symbol=${symbol}`);
+    const d = await info.json();
+    if (!d.symbols || d.symbols.length === 0 || d.symbols[0].status !== "TRADING") {
+      return res.status(400).json({ error: `No trading pair found for ${sym}` });
     }
 
     const params = { symbol, side: side.toUpperCase(), type: "MARKET", newOrderRespType: "FULL" };
@@ -428,6 +407,21 @@ app.post("/api/binance/order", async (req, res) => {
     });
   } catch (err) {
     console.error("Binance order error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/binance/ticker/:sym", async (req, res) => {
+  const sym = req.params.sym.toUpperCase();
+  try {
+    // Use USDT pair (AUD pairs on Binance have no liquidity)
+    const r = await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${sym}USDT`);
+    if (r.ok) {
+      const d = await r.json();
+      if (d.price) return res.json({ price: parseFloat(d.price), pair: `${sym}USDT`, currency: "USD" });
+    }
+    res.status(404).json({ error: "No price available" });
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
