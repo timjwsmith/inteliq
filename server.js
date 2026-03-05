@@ -136,8 +136,43 @@ app.get("/api/coinbase/balances", async (req, res) => {
   }
 });
 
+app.get('/api/coinbase/diag', async (req, res) => {
+  try {
+    // Check v3 AT accounts
+    const p1 = '/api/v3/brokerage/accounts';
+    const j1 = coinbaseJWT('GET', p1);
+    const r1 = await fetch(`https://api.coinbase.com${p1}`, { headers: { Authorization: `Bearer ${j1}` } });
+    const d1 = await r1.json();
+    // Check portfolios
+    const p2 = '/api/v3/brokerage/portfolios';
+    const j2 = coinbaseJWT('GET', p2);
+    const r2 = await fetch(`https://api.coinbase.com${p2}`, { headers: { Authorization: `Bearer ${j2}` } });
+    const d2 = await r2.json();
+    // Check a specific product
+    async function checkProduct(pid) {
+      const p = `/api/v3/brokerage/products/${pid}`;
+      const j = coinbaseJWT('GET', p);
+      const r = await fetch(`https://api.coinbase.com${p}`, { headers: { Authorization: `Bearer ${j}` } });
+      const d = r.ok ? await r.json() : {};
+      return { status: r.status, trading_disabled: d.trading_disabled, product_id: d.product_id };
+    }
+    res.json({
+      at_accounts: (d1.accounts || []).filter(a => ['USD','AUD','USDC','USDT'].includes(a.currency)).map(a => ({ id:a.uuid, currency:a.currency, available:a.available_balance?.value, type:a.type })),
+      portfolios: d2.portfolios || d2,
+      'SOL-AUD': await checkProduct('SOL-AUD'),
+      'SOL-USD': await checkProduct('SOL-USD'),
+      'BTC-AUD': await checkProduct('BTC-AUD'),
+      'BTC-USD': await checkProduct('BTC-USD'),
+      'ETH-AUD': await checkProduct('ETH-AUD'),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/coinbase/usd-balance', async (req, res) => {
   try {
+    // Use v3 brokerage accounts for fiat balances
     const path = '/api/v3/brokerage/accounts';
     const jwt = coinbaseJWT('GET', path);
     const r = await fetch(`https://api.coinbase.com${path}`, {
@@ -145,33 +180,88 @@ app.get('/api/coinbase/usd-balance', async (req, res) => {
     });
     const data = await r.json();
     const accounts = data.accounts || [];
-    let available = 0;
-    let availableAUD = 0;
+    let available = 0, availableAUD = 0, availableUSDC = 0;
     for (const acc of accounts) {
-      if (['USD', 'USDC'].includes(acc.currency)) {
-        available += parseFloat(acc.available_balance?.value || 0);
-      }
-      if (acc.currency === 'AUD') {
-        availableAUD += parseFloat(acc.available_balance?.value || 0);
-      }
+      if (acc.currency === 'USD')  available     += parseFloat(acc.available_balance?.value || 0);
+      if (acc.currency === 'USDC') { available += parseFloat(acc.available_balance?.value || 0); availableUSDC += parseFloat(acc.available_balance?.value || 0); }
+      if (acc.currency === 'AUD')  availableAUD  += parseFloat(acc.available_balance?.value || 0);
     }
-    res.json({ available, availableAUD });
+    res.json({ available, availableAUD, availableUSDC });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
 app.post('/api/coinbase/order', async (req, res) => {
-  const { productId, side, orderType, quoteSize, baseSize, limitPrice } = req.body;
+  const { sym: rawSym, side, quoteSize, baseSize, limitPrice, orderType, tradeCcy, audUsd } = req.body;
+  // Strip any trailing currency code so "BTC-AUD" → "BTC", "BTC" stays "BTC"
+  const sym = rawSym.replace(/-(?:AUD|USD|USDC|USDT|EUR|GBP|DAI|BUSD)$/i, '').toUpperCase();
   try {
+    // Query the full product list to find available pairs for this symbol
+    // (individual GET /products/{id} can 404 even when the pair is accessible via list)
+    // NOTE: JWT must be signed with path only (no query string)
+    const prodBasePath = `/api/v3/brokerage/products`;
+    const prodR = await fetch(`https://api.coinbase.com${prodBasePath}?product_type=SPOT&limit=250`, {
+      headers: { Authorization: `Bearer ${coinbaseJWT('GET', prodBasePath)}` }
+    });
+    const prodData = await prodR.json();
+    const allProducts = prodData.products || [];
+    console.log(`Products fetched: ${allProducts.length}, looking for ${sym}-AUD and ${sym}-USD`);
+
+    const audProduct  = allProducts.find(p => p.product_id === `${sym}-AUD`  && !p.trading_disabled);
+    const usdProduct  = allProducts.find(p => p.product_id === `${sym}-USD`  && !p.trading_disabled);
+    const usdcProduct = allProducts.find(p => p.product_id === `${sym}-USDC` && !p.trading_disabled);
+
+    // Fetch account balances to pick the right pair based on what funds are available
+    const accPath = '/api/v3/brokerage/accounts';
+    const accR = await fetch(`https://api.coinbase.com${accPath}`, {
+      headers: { Authorization: `Bearer ${coinbaseJWT('GET', accPath)}` }
+    });
+    const accData = await accR.json();
+    const accounts = accData.accounts || [];
+    const usdBal  = accounts.filter(a => a.currency === 'USD') .reduce((s,a) => s + parseFloat(a.available_balance?.value || 0), 0);
+    const usdcBal = accounts.filter(a => a.currency === 'USDC').reduce((s,a) => s + parseFloat(a.available_balance?.value || 0), 0);
+    const audBal  = accounts.filter(a => a.currency === 'AUD') .reduce((s,a) => s + parseFloat(a.available_balance?.value || 0), 0);
+    console.log(`Balances — USD: ${usdBal}, USDC: ${usdcBal}, AUD: ${audBal}`);
+    console.log(`AUD pair: ${audProduct?.product_id ?? 'none'}, USD pair: ${usdProduct?.product_id ?? 'none'}, USDC pair: ${usdcProduct?.product_id ?? 'none'}`);
+
+    // Pick the best product based on available pairs AND available balance
+    let productId, effectiveQuoteSize;
+    if (audProduct && audBal > 0) {
+      // Native AUD pair with AUD funds — ideal for Australian accounts
+      productId = audProduct.product_id;
+      effectiveQuoteSize = side === 'BUY' ? quoteSize : null;
+    } else if (usdProduct && usdBal > 0) {
+      // USD pair funded by USD
+      productId = usdProduct.product_id;
+      effectiveQuoteSize = (tradeCcy === 'AUD' && side === 'BUY' && quoteSize && audUsd)
+        ? String(parseFloat(quoteSize) * parseFloat(audUsd))
+        : quoteSize;
+    } else if (usdcProduct && usdcBal > 0) {
+      // USDC pair — USDC acts as USD equivalent
+      productId = usdcProduct.product_id;
+      effectiveQuoteSize = (tradeCcy === 'AUD' && side === 'BUY' && quoteSize && audUsd)
+        ? String(parseFloat(quoteSize) * parseFloat(audUsd))
+        : quoteSize;
+    } else if (usdProduct) {
+      // Fallback: try USD pair even with no confirmed USD balance (in case balance fetch was stale)
+      productId = usdProduct.product_id;
+      effectiveQuoteSize = (tradeCcy === 'AUD' && side === 'BUY' && quoteSize && audUsd)
+        ? String(parseFloat(quoteSize) * parseFloat(audUsd))
+        : quoteSize;
+    } else {
+      return res.status(400).json({ error_response: { message: `${sym} is not available for trading on Coinbase Advanced Trade.` } });
+    }
+    console.log(`Selected product: ${productId}, quote size: ${effectiveQuoteSize}`);
+
     const path = '/api/v3/brokerage/orders';
     const jwt = coinbaseJWT('POST', path);
 
     let order_configuration;
-    if (orderType === 'market') {
+    if (!orderType || orderType === 'market') {
       order_configuration = {
         market_market_ioc: side === 'BUY'
-          ? { quote_size: String(quoteSize) }
+          ? { quote_size: String(effectiveQuoteSize) }
           : { base_size: String(baseSize) }
       };
     } else {
@@ -184,21 +274,25 @@ app.post('/api/coinbase/order', async (req, res) => {
       };
     }
 
-    const body = JSON.stringify({
+    const orderPayload = {
       client_order_id: `inteliq-${Date.now()}`,
       product_id: productId,
       side,
       order_configuration
-    });
+    };
+    console.log('Placing order:', JSON.stringify(orderPayload));
 
     const r = await fetch(`https://api.coinbase.com${path}`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${jwt}`, 'Content-Type': 'application/json' },
-      body
+      body: JSON.stringify(orderPayload)
     });
     const data = await r.json();
-    if (!r.ok) return res.status(r.status).json(data);
-    res.json(data);
+    if (!r.ok) {
+      console.error('Coinbase order error:', JSON.stringify(data, null, 2));
+      return res.status(r.status).json(data);
+    }
+    res.json({ ...data, _productId: productId });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -625,6 +719,7 @@ app.post("/api/analyse/detail", async (req, res) => {
         max_tokens: 1500,
         system: `You are a senior investment analyst. Today is ${new Date().toLocaleDateString("en-AU",{year:"numeric",month:"long",day:"numeric"})}. You have been given live OHLCV chart data for this asset. Using this chart data AND your knowledge of the asset's fundamentals, sector dynamics, macro environment, and market conditions as of today, produce a single unified investment analysis with ONE verdict. Integrate technical signals from the chart with fundamental and macro factors — do not treat them as separate signals. The current live price is the closing price of the most recent candle. Return ONLY valid JSON (no markdown fences):
 {"verdict":"BUY|WATCH|AVOID|HOLD","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","target":"$X","stopLoss":"$X","summary":"2-3 sentences combining all factors","macro":"2-3 sentences","fundamental":"2-3 sentences","technical":"2-3 sentences based on the chart data","sentiment":"2-3 sentences","portfolio":"2-3 sentences","support":[{"price":0.0,"label":"Label","strength":"STRONG|MEDIUM|WEAK"}],"resistance":[{"price":0.0,"label":"Label","strength":"STRONG|MEDIUM|WEAK"}],"pattern":{"name":"Pattern name or null","bullish":true,"note":"1 sentence"},"momentum":"1-2 sentences","volume":"1 sentence"}
+Horizon definitions: Short = up to 3 months; Medium = 3 months to 1 year; Long = 1 year or more.
 Provide 1-3 support and 1-3 resistance levels using actual prices from the data.${fundamentalsBlock}${indicatorsBlock}`,
         messages: [{ role: "user", content: `Symbol: ${sym} (${name})\nCurrent: ${currentPrice} ${currency} | Range: ${range} | Change: ${chgPct}%\nPrice range: ${minP?.toFixed(2)} – ${maxP?.toFixed(2)}\n\nOHLCV (i=candle index, vR=vol vs avg):\n${JSON.stringify(summary)}` }],
       })
@@ -778,7 +873,8 @@ app.get("/api/dashboard/picks", async (req, res) => {
 Generate 3 high-conviction investment picks — aim for variety across asset classes (e.g. US large-cap stock, ASX stock or ETF, crypto). Pick what is genuinely interesting given current market conditions as of today's date.
 Respond ONLY with a valid JSON array, no markdown fences. Each pick must use this exact structure:
 [{"sym":"TICKER","name":"Full Company Name","sector":"Sector","verdict":"BUY|WATCH|AVOID|HOLD","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","priceStatic":0.00,"target":"$X","upside":"+X%","up":true,"priceType":"stock or crypto","priceCurrency":"USD or AUD","avgCurrency":"USD or AUD","summary":"2-3 sentences on the core thesis.","macro":"2-3 sentences on macro tailwinds or headwinds.","fundamental":"2-3 sentences on key fundamental metrics.","technical":"2-3 sentences on technical setup.","sentiment":"2-3 sentences on analyst and market sentiment.","insider":"2-3 sentences on insider activity or institutional flows.","portfolio":"1-2 sentences on portfolio fit and sizing."}]
-Rules: ASX tickers must end in .AX. Use standard crypto symbols (BTC, ETH, SOL etc). For priceStatic use your best estimate of the current price. Be direct and specific — avoid generic statements.`,
+Rules: ASX tickers must end in .AX. Use standard crypto symbols (BTC, ETH, SOL etc). For priceStatic use your best estimate of the current price. Be direct and specific — avoid generic statements.
+Horizon definitions: Short = up to 3 months; Medium = 3 months to 1 year; Long = 1 year or more.`,
         messages: [{ role: "user", content: "Generate today's 3 top investment picks with full analysis." }],
       }),
     });
@@ -919,7 +1015,8 @@ app.post("/api/screener", async (req, res) => {
       body: JSON.stringify({
         model: "claude-sonnet-4-20250514", max_tokens: 2000,
         system: `You are a senior investment analyst running a stock screener. Today is ${today}. The user has described what they are looking for in plain English. Return 5–7 stocks that best match their criteria as of today. Be specific and current — pick stocks that genuinely fit right now, not generic examples. ASX tickers must end in .AX. Return ONLY a valid JSON array with no markdown, no preamble, no explanation — just the raw JSON array:
-[{"sym":"TICKER","name":"Full Company Name","sector":"Sector","verdict":"BUY|WATCH|AVOID|HOLD","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","priceStatic":0.00,"target":"$X","upside":"+X%","up":true,"priceType":"stock or crypto","priceCurrency":"USD or AUD","avgCurrency":"USD or AUD","matchReason":"2-3 sentences on exactly why this matches the screen criteria","summary":"2-3 sentences on the investment thesis"}]`,
+[{"sym":"TICKER","name":"Full Company Name","sector":"Sector","verdict":"BUY|WATCH|AVOID|HOLD","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","priceStatic":0.00,"target":"$X","upside":"+X%","up":true,"priceType":"stock or crypto","priceCurrency":"USD or AUD","avgCurrency":"USD or AUD","matchReason":"2-3 sentences on exactly why this matches the screen criteria","summary":"2-3 sentences on the investment thesis"}]
+Horizon definitions: Short = up to 3 months; Medium = 3 months to 1 year; Long = 1 year or more.`,
         messages: [
           { role:"user", content: `Screen for: ${query}` },
           { role:"assistant", content: "[" },

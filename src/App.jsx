@@ -129,6 +129,9 @@ const GLOSSARY = [
   { term:"Beta",                       def:"A measure of a portfolio's or stock's sensitivity to market movements relative to a benchmark (typically the S&P 500). Beta < 1 means less volatile than the market (lower risk); Beta > 1 means more volatile (higher risk); Beta < 0 means it tends to move inversely to the market." },
   { term:"Sharpe Ratio",               def:"A measure of risk-adjusted return. Calculated as (portfolio return − risk-free rate) / portfolio volatility. A Sharpe above 1.0 is considered good — it means you are being adequately compensated for the risk taken. Below 0 means the portfolio underperformed the risk-free rate." },
   { term:"Maximum Drawdown",           def:"The largest peak-to-trough decline in portfolio value over a given period, expressed as a percentage. A Max Drawdown of −20% means the portfolio fell 20% from its highest point before recovering. It measures downside risk and the worst loss an investor could have experienced." },
+  { term:"Short Term",                 def:"An investment horizon of up to 3 months. Short-term calls focus on near-term catalysts such as earnings releases, technical breakouts, macro events, or momentum. Suitable for more active traders willing to monitor positions closely." },
+  { term:"Medium Term",                def:"An investment horizon of 3 months to 1 year. Medium-term calls look for a confluence of improving fundamentals, sector tailwinds, and supportive technicals to play out over multiple quarters." },
+  { term:"Long Term",                  def:"An investment horizon of 1 year or more. Long-term calls are driven by structural growth themes, durable competitive advantages, or deep value — where patience is rewarded as the thesis plays out over an extended period." },
 ];
 
 const TABS = [
@@ -1860,19 +1863,17 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
 }
 
 // ── Trade Modal ─────────────────────────────────────────────────────────────
-function TradeModal({ config, onClose, onSuccess, displayCcy }) {
+function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
   const { sym, name } = config;
   const tradeCcy = displayCcy === "AUD" ? "AUD" : "USD";
-  const effectiveProductId = `${sym}-${tradeCcy}`;
   const ccySymbol = tradeCcy === "AUD" ? "A$" : "$";
 
   const [side, setSide] = useState(config.side || "BUY");
-  const [orderType, setOrderType] = useState("market");
   const [step, setStep] = useState(1);
   const [availBal, setAvailBal] = useState(null);
+  const [usdcBal, setUsdcBal] = useState(null);
   const [quoteAmount, setQuoteAmount] = useState("");
   const [cryptoQty, setCryptoQty] = useState("");
-  const [limitPrice, setLimitPrice] = useState("");
   const [livePrice, setLivePrice] = useState(null);
   const [result, setResult] = useState(null);
   const [placing, setPlacing] = useState(false);
@@ -1880,7 +1881,7 @@ function TradeModal({ config, onClose, onSuccess, displayCcy }) {
   useEffect(() => {
     fetch("/api/coinbase/usd-balance")
       .then(r => r.json())
-      .then(d => setAvailBal(tradeCcy === "AUD" ? (d.availableAUD ?? null) : (d.available ?? null)))
+      .then(d => { setAvailBal(tradeCcy === "AUD" ? (d.availableAUD ?? null) : (d.available ?? null)); setUsdcBal(d.availableUSDC ?? null); })
       .catch(() => setAvailBal(null));
     fetch(`/api/chart?sym=${sym}&range=1d&type=crypto`)
       .then(r => r.json())
@@ -1888,30 +1889,36 @@ function TradeModal({ config, onClose, onSuccess, displayCcy }) {
       .catch(() => {});
   }, [sym, tradeCcy]);
 
-  const estQty = side === "BUY" && orderType === "market" && livePrice && parseFloat(quoteAmount) > 0
-    ? (parseFloat(quoteAmount) / livePrice).toFixed(6) : null;
+  // livePrice from chart is in USD; convert for display
+  const livePriceDisplay = livePrice != null
+    ? (tradeCcy === "AUD" ? livePrice / 0.635 : livePrice)  // rough conversion for estimate only
+    : null;
+  const estQty = side === "BUY" && livePriceDisplay && parseFloat(quoteAmount) > 0
+    ? (parseFloat(quoteAmount) / livePriceDisplay).toFixed(6) : null;
 
-  const canReview = orderType === "market"
-    ? (side === "BUY" ? !!parseFloat(quoteAmount) : !!parseFloat(cryptoQty))
-    : (!!parseFloat(cryptoQty) && !!parseFloat(limitPrice));
+  const canReview = side === "BUY" ? !!parseFloat(quoteAmount) : !!parseFloat(cryptoQty);
 
   async function placeOrder() {
     setPlacing(true);
     try {
-      const body = { productId: effectiveProductId, side, orderType };
-      if (orderType === "market" && side === "BUY") body.quoteSize = parseFloat(quoteAmount);
-      if (orderType === "market" && side === "SELL") body.baseSize = parseFloat(cryptoQty);
-      if (orderType === "limit") { body.baseSize = parseFloat(cryptoQty); body.limitPrice = parseFloat(limitPrice); }
+      const body = { sym, side, tradeCcy, orderType: "market", audUsd };
+      if (side === "BUY") body.quoteSize = parseFloat(quoteAmount);
+      else body.baseSize = parseFloat(cryptoQty);
       const r = await fetch("/api/coinbase/order", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
       const data = await r.json();
-      if (r.ok && data.success?.order_id) {
-        setResult({ ok: true, orderId: data.success.order_id, status: data.success.status });
+      if (r.ok && data.success && data.success_response?.order_id) {
+        setResult({
+          ok: true,
+          orderId: data.success_response.order_id,
+          productId: data._productId,
+          status: data.order?.status || "OPEN",
+        });
       } else {
-        const errMsg = data.error_response?.message || data.error || JSON.stringify(data);
+        const errMsg = data.error_response?.message || data.message || data.errors?.[0]?.message || data.error || JSON.stringify(data);
         setResult({ ok: false, error: errMsg });
       }
     } catch (e) {
@@ -1930,7 +1937,7 @@ function TradeModal({ config, onClose, onSuccess, displayCcy }) {
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:22 }}>
           <div>
             <h2 style={{ fontFamily:"var(--ff-head)", fontSize:20, fontWeight:800, color:"var(--text2)", margin:0 }}>Trade {sym}</h2>
-            <p style={{ fontSize:11, color:"var(--muted)", fontFamily:"var(--ff-mono)", margin:"4px 0 0", letterSpacing:"0.06em" }}>{name} · Coinbase · {effectiveProductId}</p>
+            <p style={{ fontSize:11, color:"var(--muted)", fontFamily:"var(--ff-mono)", margin:"4px 0 0", letterSpacing:"0.06em" }}>{name} · Coinbase · {sym}/{tradeCcy}</p>
           </div>
           <button onClick={onClose} style={{ background:"none", border:"none", color:"var(--muted2)", fontSize:20, cursor:"pointer", lineHeight:1 }}>✕</button>
         </div>
@@ -1951,47 +1958,32 @@ function TradeModal({ config, onClose, onSuccess, displayCcy }) {
                 </button>
               ))}
             </div>
-            <div style={{ display:"flex", gap:8, marginBottom:22 }}>
-              {["market","limit"].map(t => (
-                <button key={t} onClick={() => setOrderType(t)} style={{ ...btnBase, flex:1, fontSize:10, letterSpacing:"0.1em",
-                  background: t === orderType ? "var(--card)" : "none",
-                  color: t === orderType ? "var(--text2)" : "var(--muted)",
-                  border:`1px solid ${t === orderType ? "var(--border2)" : "var(--border)"}`,
-                  fontWeight: t === orderType ? 700 : 400 }}>
-                  {t.toUpperCase()}
-                </button>
-              ))}
-            </div>
             <div style={{ marginBottom:18 }}>
               <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>{tradeCcy} AVAILABLE</div>
               <div style={{ fontSize:16, fontFamily:"var(--ff-mono)", color:"var(--text2)", fontWeight:600 }}>
                 {availBal != null ? `${ccySymbol}${availBal.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}` : "Loading…"}
               </div>
+              {usdcBal != null && <div style={{ fontSize:10, fontFamily:"var(--ff-mono)", color:"var(--muted)", marginTop:4 }}>
+                USDC: ${usdcBal.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}
+              </div>}
             </div>
-            {orderType === "market" && side === "BUY" && (
+            {side === "BUY" && usdcBal != null && usdcBal <= 0 && availBal != null && availBal <= 0 && (
+              <div style={{ background:"#ffab4010", border:"1px solid #ffab4040", borderRadius:10, padding:"10px 14px", fontSize:11, color:"var(--amber)", marginBottom:18, lineHeight:1.5 }}>
+                No USDC or USD available. Coinbase Advanced Trade uses USDC/USD for buying. Buy some USDC in the Coinbase app first, then sync and retry.
+              </div>
+            )}
+            {side === "BUY" && (
               <div style={{ marginBottom:18 }}>
                 <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>AMOUNT ({tradeCcy})</div>
                 <input value={quoteAmount} onChange={e => setQuoteAmount(e.target.value)} type="number" min="0" placeholder="e.g. 100" style={inputStyle}/>
                 {estQty && <div style={{ fontSize:10, color:"var(--muted)", fontFamily:"var(--ff-mono)", marginTop:6 }}>≈ {estQty} {sym}</div>}
               </div>
             )}
-            {orderType === "market" && side === "SELL" && (
+            {side === "SELL" && (
               <div style={{ marginBottom:18 }}>
                 <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>QUANTITY ({sym})</div>
                 <input value={cryptoQty} onChange={e => setCryptoQty(e.target.value)} type="number" min="0" placeholder="e.g. 0.005" style={inputStyle}/>
               </div>
-            )}
-            {orderType === "limit" && (
-              <>
-                <div style={{ marginBottom:14 }}>
-                  <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>QUANTITY ({sym})</div>
-                  <input value={cryptoQty} onChange={e => setCryptoQty(e.target.value)} type="number" min="0" placeholder="e.g. 0.005" style={inputStyle}/>
-                </div>
-                <div style={{ marginBottom:18 }}>
-                  <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>LIMIT PRICE ({tradeCcy})</div>
-                  <input value={limitPrice} onChange={e => setLimitPrice(e.target.value)} type="number" min="0" placeholder={tradeCcy === "AUD" ? "e.g. 150000" : "e.g. 95000"} style={inputStyle}/>
-                </div>
-              </>
             )}
             <button onClick={() => setStep(2)} disabled={!canReview}
               style={{ ...btnBase, width:"100%", background: side === "BUY" ? "var(--green)" : "var(--red)", color:"#0a0a14", opacity: canReview ? 1 : 0.4 }}>
@@ -2004,13 +1996,11 @@ function TradeModal({ config, onClose, onSuccess, displayCcy }) {
           <>
             <div style={{ background:"var(--card)", border:"1px solid var(--border)", borderRadius:12, padding:"18px 20px", marginBottom:20 }}>
               {[
-                { l:"SYMBOL", v:effectiveProductId },
+                { l:"ASSET", v:sym },
                 { l:"SIDE", v:side },
-                { l:"TYPE", v:orderType.toUpperCase() },
-                orderType === "market" && side === "BUY" && { l:"SPEND", v:`${ccySymbol}${parseFloat(quoteAmount).toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})} ${tradeCcy}` },
-                orderType === "market" && side === "SELL" && { l:"SELL QTY", v:`${cryptoQty} ${sym}` },
-                orderType === "limit" && { l:"QTY", v:`${cryptoQty} ${sym}` },
-                orderType === "limit" && { l:"LIMIT PRICE", v:`${ccySymbol}${parseFloat(limitPrice).toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})} ${tradeCcy}` },
+                side === "BUY" && { l:"SPEND", v:`${ccySymbol}${parseFloat(quoteAmount).toFixed(2)} ${tradeCcy}` },
+                side === "SELL" && { l:"SELL QTY", v:`${cryptoQty} ${sym}` },
+                { l:"TYPE", v:"MARKET" },
               ].filter(Boolean).map(f => (
                 <div key={f.l} style={{ display:"flex", justifyContent:"space-between", marginBottom:12 }}>
                   <span style={{ fontSize:10, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em" }}>{f.l}</span>
@@ -2035,8 +2025,9 @@ function TradeModal({ config, onClose, onSuccess, displayCcy }) {
                 <>
                   <div style={{ fontSize:36, marginBottom:12 }}>✓</div>
                   <div style={{ fontFamily:"var(--ff-head)", fontSize:18, fontWeight:800, color:"var(--green)", marginBottom:8 }}>Order Placed</div>
-                  <div style={{ fontSize:11, fontFamily:"var(--ff-mono)", color:"var(--muted2)", marginBottom:6 }}>Order ID: {result.orderId}</div>
-                  {result.status && <div style={{ fontSize:11, fontFamily:"var(--ff-mono)", color:"var(--muted)" }}>Status: {result.status}</div>}
+                  {result.productId && <div style={{ fontSize:12, fontFamily:"var(--ff-mono)", color:"var(--muted2)", marginBottom:6 }}>Pair: {result.productId}</div>}
+                  <div style={{ fontSize:11, fontFamily:"var(--ff-mono)", color:"var(--muted)", marginBottom:4 }}>Order ID: {result.orderId}</div>
+                  {result.status && <div style={{ fontSize:10, fontFamily:"var(--ff-mono)", color:"var(--muted)" }}>Status: {result.status}</div>}
                 </>
               ) : (
                 <>
@@ -4216,7 +4207,7 @@ export default function App() {
         </main>
       </div>
       {tradeModal && (
-        <TradeModal config={tradeModal} onClose={()=>setTradeModal(null)} onSuccess={()=>{setTradeModal(null);syncCoinbase();}} displayCcy={displayCcy}/>
+        <TradeModal config={tradeModal} onClose={()=>setTradeModal(null)} onSuccess={()=>{setTradeModal(null);syncCoinbase();}} displayCcy={displayCcy} audUsd={audUsd} />
       )}
       <GlossaryModal open={glossaryOpen} onClose={()=>setGlossaryOpen(false)} focusTerm={glossaryTerm} allGlossary={allGlossary}/>
     </>
