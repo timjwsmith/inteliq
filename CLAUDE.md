@@ -42,9 +42,9 @@ A full-stack React + Express investment dashboard. Live stock/crypto data, AI-po
 - "Save to Watchlist" button on every result
 
 ### Portfolio
-- Sources: Coinbase (CDP JWT auth), CoinSpot (HMAC-SHA512), CMC Invest CSV import
+- Sources: Coinbase (CDP JWT auth), Binance (HMAC-SHA256), CMC Invest CSV import
 - Every holding has a CHART button (expand a row to see it) — opens the full detail page
-- All Holdings, Coinbase, CoinSpot, and CMC tabs all have chart access
+- All Holdings, Coinbase, Binance, and CMC tabs all have chart access
 - Live prices fetched in batch; crypto uses a single CoinGecko call (avoids rate limits)
 - ← BACK on the detail page returns to the correct originating tab
 
@@ -90,7 +90,9 @@ A full-stack React + Express investment dashboard. Live stock/crypto data, AI-po
 - POST `/api/prices` — batch live prices (crypto batched into one CoinGecko call)
 - GET  `/api/fx/audusd` — live AUD/USD rate
 - GET  `/api/coinbase/balances` — Coinbase Advanced Trade API (CDP JWT/ES256 auth)
-- GET  `/api/coinspot/balances` — CoinSpot read-only API (HMAC-SHA512)
+- GET  `/api/binance/balances` — Binance spot balances + VWAP cost basis (HMAC-SHA256)
+- GET  `/api/binance/aud-balance` — Binance available AUD balance for trading
+- POST `/api/binance/order` — Binance MARKET order (AUD pairs, fallback USDT)
 - GET  `/api/news` — Yahoo Finance RSS aggregated + tagged, cached 15 min
 - GET  `/api/ipo` — Finnhub IPO calendar (NASDAQ/NYSE/ASX/CBOE, 14d back → 90d ahead), cached 4h; returns `[]` if no `FINNHUB_API_KEY`
 - GET  `/api/dashboard/picks` — AI-generated top 3 picks, cached 4h (`?force=1` to bust)
@@ -115,7 +117,7 @@ trailing text/commentary that Claude occasionally appends after the JSON.
 - Key requires **Coinbase App & Advanced Trade → View (read-only)** permission
 
 ## Environment variables (.env)
-ANTHROPIC_API_KEY, COINBASE_API_KEY, COINBASE_API_SECRET, COINSPOT_API_KEY, COINSPOT_API_SECRET, FINNHUB_API_KEY (used for IPO calendar — tab shows empty state if absent), FMP_API_KEY (financialmodelingprep.com — for live fundamentals)
+ANTHROPIC_API_KEY, COINBASE_API_KEY, COINBASE_API_SECRET, BINANCE_API_KEY, BINANCE_API_SECRET, FINNHUB_API_KEY (used for IPO calendar — tab shows empty state if absent), FMP_API_KEY (financialmodelingprep.com — for live fundamentals)
 
 ## Deployment
 docker-compose down && docker-compose up --build --force-recreate

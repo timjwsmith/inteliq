@@ -12,8 +12,8 @@ const PORT = process.env.PORT || 3001;
 const ANTHROPIC_API_KEY   = process.env.ANTHROPIC_API_KEY;
 const COINBASE_API_KEY    = process.env.COINBASE_API_KEY    || "";
 const COINBASE_API_SECRET = process.env.COINBASE_API_SECRET || "";
-const COINSPOT_API_KEY    = process.env.COINSPOT_API_KEY    || "";
-const COINSPOT_API_SECRET = process.env.COINSPOT_API_SECRET || "";
+const BINANCE_API_KEY    = process.env.BINANCE_API_KEY    || "";
+const BINANCE_API_SECRET = process.env.BINANCE_API_SECRET || "";
 const FINNHUB_API_KEY     = process.env.FINNHUB_API_KEY     || "";
 const FMP_API_KEY         = process.env.FMP_API_KEY         || "";
 
@@ -298,43 +298,136 @@ app.post('/api/coinbase/order', async (req, res) => {
   }
 });
 
-// ── CoinSpot Read-Only API ─────────────────────────────────────────────────
-app.get("/api/coinspot/balances", async (req, res) => {
-  if (!COINSPOT_API_KEY || !COINSPOT_API_SECRET) {
-    return res.status(503).json({ error: "CoinSpot API keys not configured — add COINSPOT_API_KEY and COINSPOT_API_SECRET to .env" });
+// ── Binance API ───────────────────────────────────────────────────────────
+function binanceSign(queryString) {
+  return crypto.createHmac("sha256", BINANCE_API_SECRET).update(queryString).digest("hex");
+}
+async function binanceFetch(method, path, params = {}) {
+  params.timestamp = Date.now();
+  const qs = new URLSearchParams(params).toString();
+  const signature = binanceSign(qs);
+  const url = `https://api.binance.com${path}?${qs}&signature=${signature}`;
+  const r = await fetch(url, { method, headers: { "X-MBX-APIKEY": BINANCE_API_KEY } });
+  if (!r.ok) { const err = await r.json().catch(() => ({})); throw new Error(err.msg || `Binance ${r.status}`); }
+  return r.json();
+}
+
+app.get("/api/binance/balances", async (req, res) => {
+  if (!BINANCE_API_KEY || !BINANCE_API_SECRET) {
+    return res.status(503).json({ error: "Binance API keys not configured — add BINANCE_API_KEY and BINANCE_API_SECRET to .env" });
   }
   try {
-    const nonce = Date.now();
-    const postData = JSON.stringify({ nonce });
-    const sign = crypto.createHmac("sha512", COINSPOT_API_SECRET).update(postData).digest("hex");
+    const account = await binanceFetch("GET", "/api/v3/account");
+    const nonZero = (account.balances || []).filter(b => parseFloat(b.free) + parseFloat(b.locked) > 0);
+    const stablecoins = ["AUD", "USD", "USDT", "USDC", "BUSD", "DAI", "TUSD", "FDUSD"];
 
-    const r = await fetch("https://www.coinspot.com.au/api/ro/my/balances", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "key": COINSPOT_API_KEY, "sign": sign },
-      body: postData,
-    });
-    const data = await r.json();
-    if (data.status !== "ok") {
-      return res.status(400).json({ error: data.message || "CoinSpot API error" });
-    }
-
-    const holdings = [];
-    for (const entry of (data.balances || [])) {
-      for (const [sym, details] of Object.entries(entry)) {
-        const qty = parseFloat(details.balance);
-        if (qty <= 0) continue;
-        const audRate = parseFloat(details.rate || 0);
-        holdings.push({
-          sym: sym.toUpperCase(), name: sym.toUpperCase(), qty,
-          avg: audRate,
-          avgCurrency: "AUD",
-          sector: "Crypto", horizon: "Medium", priceType: "crypto", source: "coinspot",
-        });
+    // Fetch trade history for cost basis (VWAP of BUY fills)
+    const costBasis = {};
+    for (const b of nonZero) {
+      if (stablecoins.includes(b.asset)) continue;
+      try {
+        const trades = await binanceFetch("GET", "/api/v3/myTrades", { symbol: `${b.asset}AUD`, limit: 500 });
+        const buys = trades.filter(t => t.isBuyer);
+        if (buys.length > 0) {
+          const totalQty = buys.reduce((s, t) => s + parseFloat(t.qty), 0);
+          const totalCost = buys.reduce((s, t) => s + parseFloat(t.qty) * parseFloat(t.price), 0);
+          costBasis[b.asset] = totalQty > 0 ? totalCost / totalQty : 0;
+        }
+      } catch {
+        // No AUD pair trades — try USDT pair
+        try {
+          const trades = await binanceFetch("GET", "/api/v3/myTrades", { symbol: `${b.asset}USDT`, limit: 500 });
+          const buys = trades.filter(t => t.isBuyer);
+          if (buys.length > 0) {
+            const totalQty = buys.reduce((s, t) => s + parseFloat(t.qty), 0);
+            const totalCost = buys.reduce((s, t) => s + parseFloat(t.qty) * parseFloat(t.price), 0);
+            costBasis[b.asset] = { avg: totalQty > 0 ? totalCost / totalQty : 0, ccy: "USD" };
+          }
+        } catch {}
       }
     }
+
+    const holdings = nonZero
+      .filter(b => !stablecoins.includes(b.asset))
+      .map(b => {
+        const qty = parseFloat(b.free) + parseFloat(b.locked);
+        const cb = costBasis[b.asset];
+        const avg = cb ? (typeof cb === "object" ? cb.avg : cb) : 0;
+        const avgCurrency = cb && typeof cb === "object" ? cb.ccy : "AUD";
+        return {
+          sym: b.asset, name: b.asset, qty,
+          avg, avgCurrency,
+          sector: "Crypto", horizon: "Medium", priceType: "crypto", source: "binance",
+        };
+      });
+
     res.json({ holdings, lastSync: new Date().toISOString() });
   } catch (err) {
-    console.error("CoinSpot error:", err.message);
+    console.error("Binance error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/binance/aud-balance", async (req, res) => {
+  if (!BINANCE_API_KEY || !BINANCE_API_SECRET) {
+    return res.status(503).json({ error: "Binance API keys not configured" });
+  }
+  try {
+    const account = await binanceFetch("GET", "/api/v3/account");
+    const aud = (account.balances || []).find(b => b.asset === "AUD");
+    const available = aud ? parseFloat(aud.free) : 0;
+    res.json({ available });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/binance/order", async (req, res) => {
+  if (!BINANCE_API_KEY || !BINANCE_API_SECRET) {
+    return res.status(503).json({ error: "Binance API keys not configured" });
+  }
+  const { sym: rawSym, side, quoteAmount, qty } = req.body;
+  const sym = rawSym.replace(/-(?:AUD|USD|USDC|USDT)$/i, "").toUpperCase();
+  try {
+    // Try AUD pair first, fall back to USDT
+    let symbol = `${sym}AUD`;
+    let pairFound = false;
+    try {
+      const info = await fetch(`https://api.binance.com/api/v3/exchangeInfo?symbol=${symbol}`);
+      const d = await info.json();
+      if (d.symbols && d.symbols.length > 0 && d.symbols[0].status === "TRADING") pairFound = true;
+    } catch {}
+    if (!pairFound) {
+      symbol = `${sym}USDT`;
+      const info = await fetch(`https://api.binance.com/api/v3/exchangeInfo?symbol=${symbol}`);
+      const d = await info.json();
+      if (!d.symbols || d.symbols.length === 0 || d.symbols[0].status !== "TRADING") {
+        return res.status(400).json({ error: `No trading pair found for ${sym}` });
+      }
+    }
+
+    const params = { symbol, side: side.toUpperCase(), type: "MARKET", newOrderRespType: "FULL" };
+    if (side.toUpperCase() === "BUY" && quoteAmount) {
+      params.quoteOrderQty = String(quoteAmount);
+    } else if (qty) {
+      params.quantity = String(qty);
+    } else {
+      return res.status(400).json({ error: "Missing quoteAmount (for BUY) or qty (for SELL)" });
+    }
+
+    const result = await binanceFetch("POST", "/api/v3/order", params);
+    res.json({
+      success: true,
+      orderId: result.orderId,
+      symbol: result.symbol,
+      side: result.side,
+      status: result.status,
+      executedQty: result.executedQty,
+      cummulativeQuoteQty: result.cummulativeQuoteQty,
+      fills: result.fills,
+    });
+  } catch (err) {
+    console.error("Binance order error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1373,7 +1466,7 @@ app.get("/health", (_, res) => res.json({
   status: "ok",
   anthropic: !!ANTHROPIC_API_KEY,
   coinbase:  !!(COINBASE_API_KEY && COINBASE_API_SECRET),
-  coinspot:  !!(COINSPOT_API_KEY && COINSPOT_API_SECRET),
+  binance:   !!(BINANCE_API_KEY && BINANCE_API_SECRET),
   finnhub:   !!FINNHUB_API_KEY,
   fmp:       !!FMP_API_KEY,
   ipo:       !!FINNHUB_API_KEY,
@@ -1383,7 +1476,7 @@ app.listen(PORT, () => {
   console.log(`✅ IntelIQ server running on port ${PORT}`);
   console.log(`   Anthropic: ${ANTHROPIC_API_KEY ? "✓" : "✗ missing"}`);
   console.log(`   Coinbase:  ${COINBASE_API_KEY  ? "✓" : "✗ not configured"}`);
-  console.log(`   CoinSpot:  ${COINSPOT_API_KEY  ? "✓" : "✗ not configured"}`);
+  console.log(`   Binance:   ${BINANCE_API_KEY   ? "✓" : "✗ not configured"}`);
   console.log(`   Finnhub:   ${FINNHUB_API_KEY   ? "✓" : "✗ optional"}`);
   console.log(`   FMP:       ${FMP_API_KEY        ? "✓" : "✗ not configured (fundamentals disabled)"}`);
 });
