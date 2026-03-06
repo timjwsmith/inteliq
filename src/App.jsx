@@ -2226,20 +2226,24 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
 // ── Glossary modal ─────────────────────────────────────────────────────────
 function GlossaryModal({ open, onClose, focusTerm, allGlossary }) {
   const termRefs = useRef({});
+  const [glossarySearch, setGlossarySearch] = useState("");
   useEffect(() => {
     if (open && focusTerm && termRefs.current[focusTerm]) {
       setTimeout(() => termRefs.current[focusTerm].scrollIntoView({ behavior:"smooth", block:"center" }), 120);
     }
+    if (!open) setGlossarySearch("");
   }, [open, focusTerm]);
   if (!open) return null;
   const gl = allGlossary || GLOSSARY;
   const sorted = [...gl].sort((a, b) => a.term.localeCompare(b.term));
   const builtInTerms = new Set(GLOSSARY.map(g => g.term));
   const customCount = gl.filter(g => !builtInTerms.has(g.term)).length;
+  const q = glossarySearch.toLowerCase().trim();
+  const filtered = q ? sorted.filter(g => g.term.toLowerCase().includes(q) || (g.def || g.definition || "").toLowerCase().includes(q)) : sorted;
   return (
     <div onClick={onClose} style={{ position:"fixed", inset:0, background:"#00000090", zIndex:1000, display:"flex", alignItems:"flex-start", justifyContent:"center", padding:"5vh 20px", overflowY:"auto" }}>
       <div onClick={e => e.stopPropagation()} style={{ background:"var(--surface)", border:"1px solid var(--border2)", borderRadius:16, padding:"28px 32px", maxWidth:660, width:"100%", marginBottom:40 }}>
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:24 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:16 }}>
           <div>
             <h2 style={{ fontFamily:"var(--ff-head)", fontSize:22, fontWeight:800, color:"var(--text2)", letterSpacing:"-0.02em" }}>Glossary</h2>
             <p style={{ fontSize:11, color:"var(--muted)", fontFamily:"var(--ff-mono)", letterSpacing:"0.06em", marginTop:4 }}>
@@ -2248,8 +2252,10 @@ function GlossaryModal({ open, onClose, focusTerm, allGlossary }) {
           </div>
           <button onClick={onClose} style={{ background:"none", border:"1px solid var(--border)", borderRadius:8, padding:"7px 16px", color:"var(--muted2)", fontSize:11, fontFamily:"var(--ff-mono)", letterSpacing:"0.06em", flexShrink:0 }}>CLOSE ✕</button>
         </div>
-        <div style={{ maxHeight:"65vh", overflowY:"auto", paddingRight:4 }}>
-          {sorted.map(g => {
+        <input value={glossarySearch} onChange={e => setGlossarySearch(e.target.value)} placeholder="Search terms…" autoFocus={!focusTerm} style={{ width:"100%", background:"var(--card)", border:"1px solid var(--border)", borderRadius:10, padding:"10px 16px", color:"var(--text2)", fontSize:13, fontFamily:"var(--ff-body)", marginBottom:16, boxSizing:"border-box" }}/>
+        <div style={{ maxHeight:"60vh", overflowY:"auto", paddingRight:4 }}>
+          {filtered.length === 0 && <p style={{ fontSize:13, color:"var(--muted)", textAlign:"center", padding:"20px 0" }}>No terms matching "{glossarySearch}"</p>}
+          {filtered.map(g => {
             const isCustom = !builtInTerms.has(g.term);
             return (
               <div key={g.term} ref={el => { termRefs.current[g.term] = el; }}
