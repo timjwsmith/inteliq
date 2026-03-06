@@ -807,6 +807,7 @@ app.post("/api/analyse/detail", async (req, res) => {
         system: `You are a senior investment analyst. Today is ${new Date().toLocaleDateString("en-AU",{year:"numeric",month:"long",day:"numeric"})}. You have been given live OHLCV chart data for this asset. Using this chart data AND your knowledge of the asset's fundamentals, sector dynamics, macro environment, and market conditions as of today, produce a single unified investment analysis with ONE verdict. Integrate technical signals from the chart with fundamental and macro factors — do not treat them as separate signals. The current live price is the closing price of the most recent candle. Return ONLY valid JSON (no markdown fences):
 {"verdict":"BUY|WATCH|AVOID|HOLD","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","target":"$X","stopLoss":"$X","summary":"2-3 sentences combining all factors","macro":"2-3 sentences","fundamental":"2-3 sentences","technical":"2-3 sentences based on the chart data","sentiment":"2-3 sentences","portfolio":"2-3 sentences","support":[{"price":0.0,"label":"Label","strength":"STRONG|MEDIUM|WEAK"}],"resistance":[{"price":0.0,"label":"Label","strength":"STRONG|MEDIUM|WEAK"}],"pattern":{"name":"Pattern name or null","bullish":true,"note":"1 sentence"},"momentum":"1-2 sentences","volume":"1 sentence"}
 Horizon definitions: Short = up to 3 months; Medium = 3 months to 1 year; Long = 1 year or more.
+Match your horizon to the chart range: 1mo = Short, 3mo = Short, 6mo = Medium, 1y = Medium, 5y = Long.
 Provide 1-3 support and 1-3 resistance levels using actual prices from the data.${fundamentalsBlock}${indicatorsBlock}`,
         messages: [{ role: "user", content: `Symbol: ${sym} (${name})\nCurrent: ${currentPrice} ${currency} | Range: ${range} | Change: ${chgPct}%\nPrice range: ${minP?.toFixed(2)} – ${maxP?.toFixed(2)}\n\nOHLCV (i=candle index, vR=vol vs avg):\n${JSON.stringify(summary)}` }],
       })
@@ -978,7 +979,7 @@ Horizon definitions: Short = up to 3 months; Medium = 3 months to 1 year; Long =
         const result = pick.priceType === "crypto"
           ? await fetchCryptoPrice(pick.sym)
           : await fetchStockPrice(pick.sym);
-        if (result?.price) pick.priceStatic = result.price;
+        if (result?.price) { pick.priceStatic = result.price; pick.priceCurrency = result.currency || pick.priceCurrency; }
       } catch {}
     }));
     dashCache = { picks: parsed, ts: now };

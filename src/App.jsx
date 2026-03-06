@@ -219,6 +219,12 @@ function fmtMoney(v, ccy) {
   return `${s}${v.toFixed(4)}`;
 }
 
+function fmtDate(iso) {
+  if (!iso) return "—";
+  try { const d = new Date(typeof iso === "string" && iso.length === 10 ? iso + "T00:00:00" : iso); const dd = String(d.getDate()).padStart(2,"0"); const mm = String(d.getMonth()+1).padStart(2,"0"); return `${dd}-${mm}-${d.getFullYear()}`; }
+  catch { return String(iso); }
+}
+
 function calcPnl(holding, livePriceData, audUsd) {
   const livePrice = livePriceData?.price;
   if (!livePrice || !holding.avg) return { pct: "—", up: true, raw: 0, valid: false };
@@ -884,11 +890,7 @@ function DividendPanel({ holdings, livePrices, audUsd, displayCcy }) {
 
   if (!stockSymKey) return null;
 
-  const fmtDate = iso => {
-    if (!iso) return "—";
-    try { return new Date(iso + "T00:00:00").toLocaleDateString("en-AU", { day:"numeric", month:"short", year:"2-digit" }); }
-    catch { return iso; }
-  };
+  // uses global fmtDate helper
 
   // Build rows: one per dividend-paying stock, normalised to USD
   let totalIncomeUSD = 0;
@@ -1027,6 +1029,7 @@ function HoldingRow({ holding, livePrice, expanded, onToggle, onRemove, onViewCh
           <div style={{ textAlign:"right", minWidth:70 }}>
             <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:4 }}>P&L</div>
             <div style={{ fontFamily:"var(--ff-mono)", fontSize:15, fontWeight:600, color:pnl.up?"var(--green)":"var(--red)" }}>{pnl.pct}</div>
+            {pnl.valid && holding.avg > 0 && dispPrice != null && dispAvg != null && (() => { const pnlDollar = holding.qty * (dispPrice - dispAvg); return <div style={{ fontSize:10, color:pnlDollar>=0?"var(--green)":"var(--red)", marginTop:2, fontFamily:"var(--ff-mono)" }}>{pnlDollar>=0?"+":"−"}{fmtMoney(Math.abs(pnlDollar), displayCcy)}</div>; })()}
             {livePrice && <div style={{ fontSize:10, color:livePrice.up?"var(--green)":"var(--red)", marginTop:2, fontFamily:"var(--ff-mono)" }}>{livePrice.changeStr} today</div>}
           </div>
         </div>
@@ -1054,12 +1057,12 @@ function HoldingRow({ holding, livePrice, expanded, onToggle, onRemove, onViewCh
                 CHART
               </button>
             )}
-            {holding.source === "coinbase" && onTrade && (
+            {(holding.source === "coinbase" || holding.source === "binance") && onTrade && (
               <>
-                <button onClick={e=>{e.stopPropagation();onTrade({sym:holding.sym,name:holding.name,productId:`${holding.sym}-USD`,side:"BUY",priceType:"crypto"});}} style={{ background:"#00e67610", border:"1px solid #00e67640", borderRadius:8, padding:"7px 14px", color:"var(--green)", fontSize:11, fontFamily:"var(--ff-mono)", letterSpacing:"0.06em" }}>
+                <button onClick={e=>{e.stopPropagation();onTrade({sym:holding.sym,name:holding.name,productId:`${holding.sym}-USD`,side:"BUY",priceType:"crypto",exchange:holding.source});}} style={{ background:"#00e67610", border:"1px solid #00e67640", borderRadius:8, padding:"7px 14px", color:"var(--green)", fontSize:11, fontFamily:"var(--ff-mono)", letterSpacing:"0.06em" }}>
                   BUY
                 </button>
-                <button onClick={e=>{e.stopPropagation();onTrade({sym:holding.sym,name:holding.name,productId:`${holding.sym}-USD`,side:"SELL",priceType:"crypto"});}} style={{ background:"#ff525218", border:"1px solid #ff525240", borderRadius:8, padding:"7px 14px", color:"var(--red)", fontSize:11, fontFamily:"var(--ff-mono)", letterSpacing:"0.06em" }}>
+                <button onClick={e=>{e.stopPropagation();onTrade({sym:holding.sym,name:holding.name,productId:`${holding.sym}-USD`,side:"SELL",priceType:"crypto",exchange:holding.source});}} style={{ background:"#ff525218", border:"1px solid #ff525240", borderRadius:8, padding:"7px 14px", color:"var(--red)", fontSize:11, fontFamily:"var(--ff-mono)", letterSpacing:"0.06em" }}>
                   SELL
                 </button>
               </>
@@ -1275,7 +1278,7 @@ function StockCard({ stock, expanded, onToggle, livePrices, displayCcy, audUsd, 
           {ld && !ld.error
             ? <div style={{fontFamily:"var(--ff-mono)",fontSize:12,color:ld.up?"var(--green)":"var(--red)"}}>{ld.changeStr}</div>
             : <div style={{fontFamily:"var(--ff-mono)",fontSize:12,color:stock.up?"var(--green)":"var(--red)"}}>{stock.upside}</div>}
-          <div style={{fontSize:10,color:"var(--muted)",marginTop:4,fontFamily:"var(--ff-mono)"}}>tgt {stock.target}</div>
+          <div style={{fontSize:10,color:"var(--muted)",marginTop:4,fontFamily:"var(--ff-mono)"}}>tgt {(() => { const tn = parseTargetNum(stock.target); if (tn == null) return stock.target; return fmtMoney(toDisplay(tn, priceCcy, displayCcy, audUsd), displayCcy); })()}</div>
         </div>
       </div>
       <p style={{fontSize:13,color:"var(--muted2)",lineHeight:1.7,marginTop:14}}><LinkedText>{stock.summary}</LinkedText></p>
@@ -1360,7 +1363,7 @@ function IpoCard({ ipo, onAnalyse }) {
     if (diffDays === -1) return "Yesterday";
     if (diffDays > 0 && diffDays <= 30) return `in ${diffDays} days`;
     if (diffDays < 0 && diffDays >= -30) return `${Math.abs(diffDays)} days ago`;
-    return d.toLocaleDateString("en-AU", { day:"numeric", month:"short", year:"numeric" });
+    return fmtDate(dateStr);
   }
 
   const shares = ipo.numberOfShares ? (ipo.numberOfShares / 1e6).toFixed(1) + "M shares" : null;
@@ -1461,7 +1464,7 @@ function CallCard({ record, currentPriceData, onAnalyse, onRemove, priceFetching
             <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:3 }}>CALLED</div>
             <div style={{ fontFamily:"var(--ff-mono)", fontSize:14, fontWeight:500, color:"var(--text2)" }}>{ageSince(record.calledAt)}</div>
             <div style={{ fontFamily:"var(--ff-mono)", fontSize:10, color:"var(--muted)", marginTop:2 }}>
-              {new Date(record.calledAt).toLocaleDateString("en-AU", { day:"numeric", month:"short", year:"numeric" })}
+              {fmtDate(record.calledAt)}
             </div>
           </div>
           <div style={{ textAlign:"right" }}>
@@ -2428,7 +2431,7 @@ export default function App() {
   // Fetch live prices whenever holdings, watchlist, or dashboard picks change
   useEffect(() => {
     const all = [
-      ...cbHoldings, ...bnHoldings, ...cmcHoldings,
+      ...cbHoldings, ...bnHoldings, ...ldgHoldings, ...cmcHoldings,
       ...dashPicks.map(s => ({ sym:s.sym, priceType:s.priceType })),
       ...watchlist.map(w => ({ sym:w.sym, priceType:w.priceType })),
     ];
@@ -2686,7 +2689,7 @@ export default function App() {
             ...(!isKnownCrypto ? [fetch(`/api/fundamentals/${upperQ}`).then(r=>r.json()).catch(()=>null)] : []),
           ];
           const [pd, fmpData] = await Promise.all(parallelFetches);
-          if (pd?.price) { livePrice = pd.price; livePriceCtx = ` The current live market price is $${pd.price.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})} USD as of today — base all price levels, support/resistance, and targets on this actual price.`; }
+          if (pd?.price) { livePrice = pd.price; const pdCcy = pd.currency || "USD"; livePriceCtx = ` The current live market price is $${pd.price.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})} ${pdCcy} as of today — base all price levels, support/resistance, and targets on this actual price.`; }
           if (fmpData) fundamentals = fmpData;
         } catch {}
       }
@@ -3004,7 +3007,7 @@ export default function App() {
               </div>
               <div className="fu2" style={{display:"flex",gap:8,marginBottom:20}}>
                 <input value={searchQ} onChange={e=>setSearchQ(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleSearch()} placeholder="e.g. NVIDIA, BHP, Bitcoin…" style={{flex:1,background:"var(--card)",border:"1px solid var(--border)",borderRadius:10,padding:"13px 18px",color:"var(--text2)",fontSize:14}}/>
-                <button onClick={handleSearch} disabled={searching} style={{background:searching?"var(--card)":"var(--green)",color:searching?"var(--muted)":"#0a0a14",border:"none",borderRadius:10,padding:"13px 28px",fontSize:13,fontFamily:"var(--ff-head)",fontWeight:700,opacity:searching?.7:1}}>
+                <button onClick={()=>handleSearch()} disabled={searching} style={{background:searching?"var(--card)":"var(--green)",color:searching?"var(--muted)":"#0a0a14",border:"none",borderRadius:10,padding:"13px 28px",fontSize:13,fontFamily:"var(--ff-head)",fontWeight:700,opacity:searching?.7:1}}>
                   {searching?"Analysing…":"Analyse →"}
                 </button>
               </div>
@@ -3066,7 +3069,7 @@ export default function App() {
                               <SectorBadge sector={h.sector}/>
                             </div>
                             <div style={{display:"flex",gap:10,alignItems:"center",flexShrink:0}}>
-                              {h.analysedAt && <span style={{fontSize:10,color:"var(--muted)",fontFamily:"var(--ff-mono)"}}>{new Date(h.analysedAt).toLocaleDateString("en-AU",{day:"numeric",month:"short"})}</span>}
+                              {h.analysedAt && <span style={{fontSize:10,color:"var(--muted)",fontFamily:"var(--ff-mono)"}}>{fmtDate(h.analysedAt)}</span>}
                               <span style={{fontSize:10,color:"var(--green)",fontFamily:"var(--ff-mono)"}}>VIEW →</span>
                             </div>
                           </div>
@@ -3152,7 +3155,13 @@ export default function App() {
                 </div>
               )}
 
-              {screenerError && <div style={{background:"#ff525212",border:"1px solid #ff525230",borderRadius:10,padding:16,color:"var(--red)",fontSize:13,marginBottom:20}}>{screenerError}</div>}
+              {screenerError && !screenerLoading && (
+                <div style={{background:"#ff525212",border:"1px solid #ff525230",borderRadius:12,padding:"20px 24px",marginBottom:20}}>
+                  <div style={{fontSize:10,fontFamily:"var(--ff-mono)",color:"var(--red)",letterSpacing:"0.08em",marginBottom:6}}>SCREENING FAILED</div>
+                  <p style={{fontSize:13,color:"var(--muted2)",marginBottom:14}}>{screenerError}</p>
+                  <button onClick={()=>runScreener()} style={{background:"none",border:"1px solid #ff525240",borderRadius:7,padding:"7px 16px",fontSize:11,color:"var(--red)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",cursor:"pointer"}}>TRY AGAIN</button>
+                </div>
+              )}
 
               {screenerResults && !screenerLoading && (
                 <div className="fi">
@@ -3179,8 +3188,8 @@ export default function App() {
                           <p style={{fontSize:13,color:"var(--muted2)",lineHeight:1.7,maxWidth:600}}>{s.summary}</p>
                         </div>
                         <div style={{textAlign:"right",flexShrink:0}}>
-                          <div style={{fontFamily:"var(--ff-mono)",fontSize:18,fontWeight:600,color:"var(--text2)",marginBottom:3}}>{s.priceStatic ? `$${s.priceStatic.toLocaleString()}` : "—"}</div>
-                          <div style={{fontSize:11,color:"var(--muted)",fontFamily:"var(--ff-mono)"}}>tgt {s.target}</div>
+                          <div style={{fontFamily:"var(--ff-mono)",fontSize:18,fontWeight:600,color:"var(--text2)",marginBottom:3}}>{s.priceStatic ? fmtMoney(toDisplay(s.priceStatic, s.priceCurrency || "USD", displayCcy, audUsd), displayCcy) : "—"}</div>
+                          <div style={{fontSize:11,color:"var(--muted)",fontFamily:"var(--ff-mono)"}}>tgt {(() => { const tn = parseTargetNum(s.target); if (tn == null) return s.target; return fmtMoney(toDisplay(tn, s.priceCurrency || "USD", displayCcy, audUsd), displayCcy); })()}</div>
                         </div>
                       </div>
                       <div style={{marginTop:12,display:"flex",gap:8,flexWrap:"wrap"}}>
@@ -3380,7 +3389,7 @@ export default function App() {
                             </div>
                             <div style={{textAlign:"right",flexShrink:0}}>
                               <div style={{fontSize:11,fontFamily:"var(--ff-mono)",color:!isPast&&diffDays<=7?"var(--amber)":"var(--muted2)",fontWeight:600,marginBottom:4}}>{countdown}</div>
-                              <div style={{fontSize:10,color:"var(--muted)",fontFamily:"var(--ff-mono)"}}>{ev.date}</div>
+                              <div style={{fontSize:10,color:"var(--muted)",fontFamily:"var(--ff-mono)"}}>{fmtDate(ev.date)}</div>
                             </div>
                           </div>
                         </div>
@@ -3784,7 +3793,7 @@ export default function App() {
                             <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:3,flexWrap:"wrap"}}>
                               <span style={{fontFamily:"var(--ff-head)",fontSize:14,fontWeight:700,color:"var(--text2)"}}>{e.sym}</span>
                               <span style={{fontSize:11,fontFamily:"var(--ff-mono)",color:countdownColor,fontWeight:600}}>{countdown}</span>
-                              <span style={{fontSize:10,color:"var(--muted)",fontFamily:"var(--ff-mono)"}}>{e.date}</span>
+                              <span style={{fontSize:10,color:"var(--muted)",fontFamily:"var(--ff-mono)"}}>{fmtDate(e.date)}</span>
                               {e.time && <span className="badge" style={{background:"var(--surface)",color:"var(--muted2)",border:"1px solid var(--border)"}}>{e.time}</span>}
                             </div>
                             {!e.isFuture && surprise != null && (
@@ -4152,13 +4161,13 @@ export default function App() {
                             <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:4,flexWrap:"wrap"}}>
                               <span className="badge" style={{background:e.action==="BUY"?"#00e67618":"#ff525218",color:e.action==="BUY"?"var(--green)":"var(--red)",border:`1px solid ${e.action==="BUY"?"#00e67640":"#ff525240"}`}}>{e.action}</span>
                               <span style={{fontFamily:"var(--ff-head)",fontSize:15,fontWeight:700,color:"var(--text2)"}}>{e.sym}</span>
-                              <span style={{fontSize:11,fontFamily:"var(--ff-mono)",color:"var(--muted)"}}>{e.date}</span>
+                              <span style={{fontSize:11,fontFamily:"var(--ff-mono)",color:"var(--muted)"}}>{fmtDate(e.date)}</span>
                               {isClosed && <span className="badge" style={{background:"var(--surface)",color:"var(--muted)",border:"1px solid var(--border)"}}>CLOSED</span>}
                               {pnlPct != null && <span style={{fontSize:11,fontFamily:"var(--ff-mono)",color:pnlPct>=0?"var(--green)":"var(--red)",fontWeight:600}}>{pnlPct>=0?"+":""}{pnlPct.toFixed(1)}%</span>}
                             </div>
                             <div style={{fontSize:11,fontFamily:"var(--ff-mono)",color:"var(--muted2)"}}>
                               {e.qty} × {e.currency}{e.price}
-                              {isClosed && ` → ${e.currency}${e.exitPrice} (${e.exitDate})`}
+                              {isClosed && ` → ${e.currency}${e.exitPrice} (${fmtDate(e.exitDate)})`}
                             </div>
                             {e.thesis && <p style={{fontSize:11,color:"var(--muted)",marginTop:6,fontStyle:"italic",lineHeight:1.4}}>{e.thesis}</p>}
                           </div>
