@@ -1251,7 +1251,7 @@ function ReasoningChain({ stock }) {
 }
 
 // ── Stock card ─────────────────────────────────────────────────────────────
-function StockCard({ stock, expanded, onToggle, livePrices, displayCcy, audUsd, onAddWatchlist, inWatchlist, onViewChart }) {
+function StockCard({ stock, expanded, onToggle, livePrices, displayCcy, audUsd, onAddWatchlist, inWatchlist, onViewChart, onTrade }) {
   const accent = {BUY:"var(--green)",WATCH:"var(--amber)",AVOID:"var(--red)",HOLD:"var(--border2)"}[stock.verdict]||"var(--border2)";
   const ld = livePrices?.[stock.sym];
   const priceCcy = stock.priceCurrency || ld?.currency || "USD";
@@ -1296,6 +1296,11 @@ function StockCard({ stock, expanded, onToggle, livePrices, displayCcy, audUsd, 
         {onViewChart && (
           <button onClick={onViewChart} style={{background:"none",border:"1px solid var(--border)",borderRadius:7,padding:"5px 14px",fontSize:10,color:"var(--muted2)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em"}}>
             CHART →
+          </button>
+        )}
+        {onTrade && (
+          <button onClick={onTrade} style={{background:"#00e67610",border:"1px solid #00e67640",borderRadius:7,padding:"5px 14px",fontSize:10,color:"var(--green)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",fontWeight:700}}>
+            ↔ TRADE
           </button>
         )}
       </div>
@@ -1504,7 +1509,7 @@ function CallCard({ record, currentPriceData, onAnalyse, onRemove, priceFetching
 }
 
 // ── Chart canvas ───────────────────────────────────────────────────────────
-function ChartCanvas({ candles, analysis, range, currency, indicators }) {
+function ChartCanvas({ candles, analysis, range, currency, indicators, displayCcy, audUsd }) {
   const canvasRef   = useRef(null);
   const containerRef = useRef(null);
   const [canvasW, setCanvasW] = useState(0);
@@ -1519,17 +1524,25 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
     return () => obs.disconnect();
   }, []);
 
-  useEffect(() => { draw(hovIdx); }, [candles, analysis, canvasW, hovIdx, indicators]);
+  useEffect(() => { draw(hovIdx); }, [candles, analysis, canvasW, hovIdx, indicators, displayCcy, audUsd]);
+
+  function convert(p) {
+    if (p == null || !displayCcy || !audUsd) return p;
+    return toDisplay(p, currency || "USD", displayCcy, audUsd);
+  }
+
+  const ccyPrefix = displayCcy === "AUD" ? "A$" : displayCcy === "USD" ? "$" : "";
 
   function fmt(p) {
     if (!p && p !== 0) return "—";
-    if (p >= 100000) return `${(p/1000).toFixed(0)}k`;
-    if (p >= 10000)  return `${(p/1000).toFixed(1)}k`;
-    if (p >= 1000)   return `${(p/1000).toFixed(2)}k`;
-    if (p >= 100)    return p.toFixed(0);
-    if (p >= 10)     return p.toFixed(1);
-    if (p >= 1)      return p.toFixed(2);
-    return p.toFixed(4);
+    const prefix = ccyPrefix;
+    if (p >= 100000) return `${prefix}${(p/1000).toFixed(0)}k`;
+    if (p >= 10000)  return `${prefix}${(p/1000).toFixed(1)}k`;
+    if (p >= 1000)   return `${prefix}${(p/1000).toFixed(2)}k`;
+    if (p >= 100)    return `${prefix}${p.toFixed(0)}`;
+    if (p >= 10)     return `${prefix}${p.toFixed(1)}`;
+    if (p >= 1)      return `${prefix}${p.toFixed(2)}`;
+    return `${prefix}${p.toFixed(4)}`;
   }
 
   function draw(hi) {
@@ -1557,15 +1570,18 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
     const rsiTop  = volTop + VOL_H + GAP2;
     const macdTop = rsiTop + RSI_H + GAP3;
 
+    // currency-converted candles (OHLC only; volume stays raw)
+    const cc = candles.map(c => ({ ...c, o: convert(c.o), h: convert(c.h), l: convert(c.l), c: convert(c.c) }));
+
     // data bounds
-    const hs = candles.map(c=>c.h).filter(Boolean);
-    const ls = candles.map(c=>c.l).filter(Boolean);
+    const hs = cc.map(c=>c.h).filter(Boolean);
+    const ls = cc.map(c=>c.l).filter(Boolean);
     if (!hs.length) return;
     const maxP = Math.max(...hs) * 1.003;
     const minP = Math.min(...ls) * 0.997;
     const pRange = maxP - minP;
     const maxVol = Math.max(...candles.map(c=>c.v||0));
-    const n = candles.length;
+    const n = cc.length;
     const toX = i => PL + (n > 1 ? (i / (n-1)) * chartW : chartW/2);
     const toY = p => PT + ((maxP - p) / pRange) * CHART_H;
     const cW  = Math.max(1.5, (chartW / n) * 0.65);
@@ -1609,8 +1625,8 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
         const upperPts = [], lowerPts = [];
         for (let i = 0; i < n; i++) {
           if (bb.upper[i] != null && bb.lower[i] != null) {
-            upperPts.push([toX(i), toY(bb.upper[i])]);
-            lowerPts.push([toX(i), toY(bb.lower[i])]);
+            upperPts.push([toX(i), toY(convert(bb.upper[i]))]);
+            lowerPts.push([toX(i), toY(convert(bb.lower[i]))]);
           }
         }
         if (upperPts.length >= 2) {
@@ -1635,7 +1651,7 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
           ctx.beginPath(); let _s = false;
           for (let i = 0; i < n; i++) {
             if (bb.middle[i] == null) { _s = false; continue; }
-            const x = toX(i), y = toY(bb.middle[i]);
+            const x = toX(i), y = toY(convert(bb.middle[i]));
             if (!_s) { ctx.moveTo(x, y); _s = true; } else ctx.lineTo(x, y);
           }
           ctx.strokeStyle = "#448aff30"; ctx.lineWidth = 1; ctx.stroke();
@@ -1648,7 +1664,7 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
         ctx.beginPath(); let _s = false;
         for (let i = 0; i < n; i++) {
           if (ema50[i] == null) { _s = false; continue; }
-          const x = toX(i), y = toY(ema50[i]);
+          const x = toX(i), y = toY(convert(ema50[i]));
           if (!_s) { ctx.moveTo(x, y); _s = true; } else ctx.lineTo(x, y);
         }
         ctx.strokeStyle = "#448aff99"; ctx.lineWidth = 1; ctx.stroke();
@@ -1659,7 +1675,7 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
         ctx.beginPath(); let _s = false;
         for (let i = 0; i < n; i++) {
           if (ema200[i] == null) { _s = false; continue; }
-          const x = toX(i), y = toY(ema200[i]);
+          const x = toX(i), y = toY(convert(ema200[i]));
           if (!_s) { ctx.moveTo(x, y); _s = true; } else ctx.lineTo(x, y);
         }
         ctx.strokeStyle = "#ffab4099"; ctx.lineWidth = 1; ctx.stroke();
@@ -1687,26 +1703,28 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
     // support lines
     ctx.setLineDash([5, 4]);
     (analysis?.support || []).forEach(s => {
-      if (!s.price || s.price < minP || s.price > maxP) return;
-      const y = toY(s.price);
+      const cp = convert(s.price);
+      if (!cp || cp < minP || cp > maxP) return;
+      const y = toY(cp);
       ctx.strokeStyle = s.strength === "STRONG" ? "#00e676aa" : "#00e67660";
       ctx.lineWidth = s.strength === "STRONG" ? 1.5 : 1;
       ctx.beginPath(); ctx.moveTo(PL, y); ctx.lineTo(W - PR, y); ctx.stroke();
       ctx.setLineDash([]);
       ctx.fillStyle = "#00e676bb"; ctx.font = "8px DM Mono,monospace"; ctx.textAlign = "right";
-      ctx.fillText(`S ${fmt(s.price)}`, W - PR - 3, y - 2);
+      ctx.fillText(`S ${fmt(cp)}`, W - PR - 3, y - 2);
       ctx.setLineDash([5, 4]);
     });
     // resistance lines
     (analysis?.resistance || []).forEach(r => {
-      if (!r.price || r.price < minP || r.price > maxP) return;
-      const y = toY(r.price);
+      const cp = convert(r.price);
+      if (!cp || cp < minP || cp > maxP) return;
+      const y = toY(cp);
       ctx.strokeStyle = r.strength === "STRONG" ? "#ff5252aa" : "#ff525260";
       ctx.lineWidth = r.strength === "STRONG" ? 1.5 : 1;
       ctx.beginPath(); ctx.moveTo(PL, y); ctx.lineTo(W - PR, y); ctx.stroke();
       ctx.setLineDash([]);
       ctx.fillStyle = "#ff5252bb"; ctx.font = "8px DM Mono,monospace"; ctx.textAlign = "right";
-      ctx.fillText(`R ${fmt(r.price)}`, W - PR - 3, y - 2);
+      ctx.fillText(`R ${fmt(cp)}`, W - PR - 3, y - 2);
       ctx.setLineDash([5, 4]);
     });
     ctx.setLineDash([]);
@@ -1714,7 +1732,7 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
     // volume bars
     for (let i = 0; i < n; i++) {
       const c = candles[i]; if (!c.v) continue;
-      const x = toX(i), up = c.c >= c.o;
+      const x = toX(i), up = cc[i].c >= cc[i].o;
       const vH = (c.v / maxVol) * VOL_H;
       ctx.fillStyle = hi === i ? (up ? "#00e676aa" : "#ff5252aa") : (up ? "#00e67630" : "#ff525230");
       ctx.fillRect(x - cW/2, volTop + VOL_H - vH, cW, vH);
@@ -1722,7 +1740,7 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
 
     // candles
     for (let i = 0; i < n; i++) {
-      const c = candles[i]; if (!c.o || !c.h || !c.l || !c.c) continue;
+      const c = cc[i]; if (!c.o || !c.h || !c.l || !c.c) continue;
       const x = toX(i), up = c.c >= c.o;
       const isHov = hi === i;
       const color = up ? (isHov ? "#33ffaa" : "#00e676") : (isHov ? "#ff7070" : "#ff5252");
@@ -1897,7 +1915,8 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
     setHovIdx(Math.max(0, Math.min(n - 1, idx)));
   }
 
-  const hov = hovIdx !== null ? candles[hovIdx] : null;
+  const hovRaw = hovIdx !== null ? candles[hovIdx] : null;
+  const hov = hovRaw ? { ...hovRaw, o: convert(hovRaw.o), h: convert(hovRaw.h), l: convert(hovRaw.l), c: convert(hovRaw.c) } : null;
 
   return (
     <div ref={containerRef} style={{width:"100%",position:"relative",borderRadius:10,overflow:"hidden"}}>
@@ -2905,6 +2924,15 @@ export default function App() {
                 )}
               </button>
             ))}
+            <div style={{ borderTop:"1px solid var(--border)", margin:"8px 0 4px", paddingTop:8 }}>
+              <button className="nav-item" onClick={()=>openGlossary()} style={{ color:"var(--amber)", width:"100%" }}>
+                <span style={{ fontSize:14 }}>◈</span>
+                <span>Glossary</span>
+                {customTerms.length > 0 && (
+                  <span style={{ marginLeft:"auto", background:"var(--amber)20", color:"var(--amber)", borderRadius:6, padding:"1px 7px", fontSize:10, fontFamily:"var(--ff-mono)", border:"1px solid var(--amber)40" }}>{customTerms.length}</span>
+                )}
+              </button>
+            </div>
           </nav>
           <div style={{ padding:"16px 8px 0", borderTop:"1px solid var(--border)", marginTop:16 }}>
             <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
@@ -2986,7 +3014,7 @@ export default function App() {
                 <div className="fu3">
                   <div className="section-label">TOP PICKS TODAY</div>
                   {dashPicks.map(s=>(
-                    <StockCard key={s.sym} stock={s} expanded={expanded===s.sym} onToggle={()=>setExp(expanded===s.sym?null:s.sym)} livePrices={livePrices} displayCcy={displayCcy} audUsd={audUsd} onViewChart={()=>openDetail({sym:s.sym,name:s.name,priceType:s.priceType,priceCurrency:s.priceCurrency||"USD",sector:s.sector},s)} onAddWatchlist={()=>addToWatchlist(s)} inWatchlist={!!watchlist.find(w=>w.sym===s.sym)}/>
+                    <StockCard key={s.sym} stock={s} expanded={expanded===s.sym} onToggle={()=>setExp(expanded===s.sym?null:s.sym)} livePrices={livePrices} displayCcy={displayCcy} audUsd={audUsd} onViewChart={()=>openDetail({sym:s.sym,name:s.name,priceType:s.priceType,priceCurrency:s.priceCurrency||"USD",sector:s.sector},s)} onAddWatchlist={()=>addToWatchlist(s)} inWatchlist={!!watchlist.find(w=>w.sym===s.sym)} onTrade={s.priceType==="crypto"&&(cbLastSync||bnLastSync)?()=>setTradeModal({sym:s.sym,name:s.name,productId:`${s.sym}-USD`,side:"BUY",priceType:"crypto"}):undefined}/>
                   ))}
                 </div>
               )}
@@ -3023,6 +3051,7 @@ export default function App() {
                     onAddWatchlist={() => addToWatchlist(searchResult)}
                     inWatchlist={!!watchlist.find(w => w.sym === searchResult.sym)}
                     onViewChart={() => openDetail({ sym:searchResult.sym, name:searchResult.name, priceType:searchResult.priceType, priceCurrency:searchResult.priceCurrency||"USD", sector:searchResult.sector }, searchResult, explorerAnalysis)}
+                    onTrade={searchResult.priceType==="crypto"&&(cbLastSync||bnLastSync)?()=>setTradeModal({sym:searchResult.sym,name:searchResult.name,productId:`${searchResult.sym}-USD`,side:"BUY",priceType:"crypto"}):undefined}
                   />
                   {explorerChartLoading && (
                     <div className="shimmer-el" style={{height:260,marginTop:16,borderRadius:14}}/>
@@ -3032,7 +3061,7 @@ export default function App() {
                       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
                         <span style={{fontSize:10,fontFamily:"var(--ff-mono)",color:"var(--muted)",letterSpacing:"0.12em",textTransform:"uppercase"}}>Price Chart — 1 Month</span>
                         <div style={{display:"flex",gap:8}}>
-                          {searchResult?.priceType==="crypto" && cbLastSync && !cbError && (
+                          {searchResult?.priceType==="crypto" && (cbLastSync || bnLastSync) && (
                             <button onClick={()=>setTradeModal({sym:searchResult.sym,name:searchResult.name,productId:`${searchResult.sym}-USD`,side:"BUY",priceType:"crypto"})} style={{background:"#00e67610",border:"1px solid #00e67640",borderRadius:7,padding:"4px 12px",fontSize:10,color:"var(--green)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",fontWeight:700}}>
                               ↔ TRADE
                             </button>
@@ -3042,7 +3071,7 @@ export default function App() {
                           </button>
                         </div>
                       </div>
-                      <ChartCanvas candles={explorerChart.candles} analysis={null} range="1mo" currency={explorerChart.currency} indicators={explorerChart.indicators}/>
+                      <ChartCanvas candles={explorerChart.candles} analysis={null} range="1mo" currency={explorerChart.currency} indicators={explorerChart.indicators} displayCcy={displayCcy} audUsd={audUsd}/>
                     </div>
                   )}
                   <button onClick={()=>{setResult(null);setSearchQ("");setExplorerChart(null);}} style={{marginTop:8,background:"none",border:"none",fontSize:10,color:"var(--muted)",fontFamily:"var(--ff-mono)",padding:0,letterSpacing:"0.06em",cursor:"pointer"}}>
@@ -4255,7 +4284,7 @@ export default function App() {
                       </div>
                     </div>
                     <div style={{display:"flex",gap:8,alignItems:"flex-start",flexWrap:"wrap"}}>
-                      {detailSym?.priceType==="crypto" && cbLastSync && !cbError && (
+                      {detailSym?.priceType==="crypto" && (cbLastSync || bnLastSync) && (
                         <button onClick={()=>setTradeModal({sym:detailSym.sym,name:detailSym.name,productId:`${detailSym.sym}-USD`,side:"BUY",priceType:"crypto"})} style={{background:"#00e67610",border:"1px solid #00e67640",borderRadius:8,padding:"8px 18px",fontSize:11,color:"var(--green)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",fontWeight:700,cursor:"pointer"}}>
                           ↔ TRADE
                         </button>
@@ -4291,7 +4320,7 @@ export default function App() {
                   </div>
                 )}
                 {!chartLoading && chartData?.candles?.length > 0 && (
-                  <ChartCanvas candles={chartData.candles} analysis={detailAnalysis} range={chartRange} currency={chartData.currency} indicators={chartData.indicators}/>
+                  <ChartCanvas candles={chartData.candles} analysis={detailAnalysis} range={chartRange} currency={chartData.currency} indicators={chartData.indicators} displayCcy={displayCcy} audUsd={audUsd}/>
                 )}
                 {!chartLoading && !chartData && (
                   <div style={{height:420,display:"flex",alignItems:"center",justifyContent:"center"}}>
