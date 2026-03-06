@@ -153,6 +153,7 @@ const PORT_TABS = [
   { id:"all",      label:"All",        color:"var(--text2)" },
   { id:"coinbase", label:"Coinbase",   color:"var(--amber)" },
   { id:"binance",  label:"Binance",    color:"#F0B90B" },
+  { id:"ledger",   label:"Ledger",     color:"#41a5f5"      },
   { id:"cmc",      label:"CMC Invest", color:"var(--blue)"  },
 ];
 
@@ -289,7 +290,7 @@ function ConvictionDots({ level }) {
 }
 
 function SourceBadge({ source }) {
-  const m = { coinbase:{l:"CB",c:"var(--amber)"}, binance:{l:"BN",c:"#F0B90B"}, cmc:{l:"CMC",c:"var(--blue)"} };
+  const m = { coinbase:{l:"CB",c:"var(--amber)"}, binance:{l:"BN",c:"#F0B90B"}, ledger:{l:"LDR",c:"#41a5f5"}, cmc:{l:"CMC",c:"var(--blue)"} };
   const s = m[source] || { l:"?", c:"var(--muted)" };
   return <span className="badge" style={{ background:`${s.c}20`, color:s.c, border:`1px solid ${s.c}40` }}>{s.l}</span>;
 }
@@ -1124,6 +1125,62 @@ function SourcePanel({ label, color, holdings, livePrices, syncing, lastSync, er
       ) : !error && (
         <div style={{ background:"var(--card)", border:"1px solid var(--border)", borderRadius:12, padding:"32px", textAlign:"center" }}>
           <p style={{ color:"var(--muted2)", fontSize:13 }}>{syncing ? "Connecting…" : "No holdings found. Check your API keys in .env"}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Ledger address manager ────────────────────────────────────────────────
+function LedgerAddressManager({ addresses, onAdd, onRemove }) {
+  const [chain, setChain] = useState("BTC");
+  const [addr, setAddr] = useState("");
+  const [error, setError] = useState("");
+
+  function validate(chain, addr) {
+    if (chain === "BTC") return /^(1|3|bc1)[a-zA-HJ-NP-Z0-9]{25,62}$/.test(addr);
+    if (chain === "ETH") return /^0x[a-fA-F0-9]{40}$/.test(addr);
+    if (chain === "SOL") return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr);
+    return false;
+  }
+
+  function handleAdd() {
+    setError("");
+    const trimmed = addr.trim();
+    if (!trimmed) return;
+    if (!validate(chain, trimmed)) { setError(`Invalid ${chain} address`); return; }
+    if (addresses.some(a => a.address === trimmed && a.chain === chain)) { setError("Address already added"); return; }
+    onAdd({ address: trimmed, chain });
+    setAddr("");
+  }
+
+  const chains = ["BTC", "ETH", "SOL"];
+  const chainColors = { BTC: "#f7931a", ETH: "#627eea", SOL: "#9945ff" };
+
+  return (
+    <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 14, padding: 24, marginTop: 18 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, fontFamily: "var(--ff-head)", color: "var(--muted2)", letterSpacing: 1, marginBottom: 16 }}>ADD WALLET ADDRESS</div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+        {chains.map(c => (
+          <button key={c} onClick={() => setChain(c)} style={{ background: chain === c ? `${chainColors[c]}20` : "none", border: `1px solid ${chain === c ? chainColors[c] : "var(--border)"}`, borderRadius: 8, padding: "6px 16px", fontSize: 12, fontWeight: chain === c ? 700 : 400, color: chain === c ? chainColors[c] : "var(--muted2)", fontFamily: "var(--ff-mono)" }}>{c}</button>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+        <input value={addr} onChange={e => setAddr(e.target.value)} onKeyDown={e => e.key === "Enter" && handleAdd()} placeholder={`Paste your ${chain} public address…`} style={{ flex: 1, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: "10px 14px", fontSize: 13, color: "var(--text)", fontFamily: "var(--ff-mono)" }} />
+        <button onClick={handleAdd} style={{ background: "#41a5f518", border: "1px solid #41a5f550", borderRadius: 8, padding: "10px 18px", fontSize: 12, fontWeight: 600, color: "#41a5f5" }}>+ Add</button>
+      </div>
+      {error && <div style={{ fontSize: 12, color: "var(--red)", marginBottom: 10 }}>{error}</div>}
+      {addresses.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, fontFamily: "var(--ff-head)", color: "var(--muted2)", letterSpacing: 1, marginBottom: 10 }}>SAVED ADDRESSES</div>
+          {addresses.map((a, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: chainColors[a.chain] }} />
+              <span style={{ fontSize: 12, fontWeight: 600, color: chainColors[a.chain], fontFamily: "var(--ff-mono)", minWidth: 32 }}>{a.chain}</span>
+              <span style={{ fontSize: 12, color: "var(--text2)", fontFamily: "var(--ff-mono)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.address}</span>
+              <button onClick={() => onRemove(i)} style={{ background: "none", border: "none", color: "var(--muted)", fontSize: 16, cursor: "pointer", padding: "2px 6px" }}>✕</button>
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -2224,6 +2281,14 @@ export default function App() {
   const [bnLastSync,setBnL]= useState(null);
   const [bnError,setBnE]   = useState("");
 
+  const [ledgerAddrs, setLedgerAddrs] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("inteliq_ledger_addrs") || "[]"); } catch { return []; }
+  });
+  const [ldgHoldings,setLdg] = useState([]);
+  const [ldgSyncing,setLdgS] = useState(false);
+  const [ldgLastSync,setLdgL]= useState(null);
+  const [ldgError,setLdgE]   = useState("");
+
   const [cmcHoldings,setCmc] = useState(() => {
     try { return JSON.parse(localStorage.getItem("inteliq_cmc") || "[]"); } catch { return []; }
   });
@@ -2371,10 +2436,15 @@ export default function App() {
     if (!unique.length) return;
     fetch("/api/prices", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({symbols:unique}) })
       .then(r=>r.json()).then(d=>setLP(p=>({...p,...d}))).catch(()=>{});
-  }, [cbHoldings,bnHoldings,cmcHoldings,dashPicks,watchlist]);
+  }, [cbHoldings,bnHoldings,ldgHoldings,cmcHoldings,dashPicks,watchlist]);
+
+  // Persist ledger addresses
+  useEffect(() => {
+    try { localStorage.setItem("inteliq_ledger_addrs", JSON.stringify(ledgerAddrs)); } catch {}
+  }, [ledgerAddrs]);
 
   // Sync exchanges on mount
-  useEffect(() => { syncCoinbase(); syncBinance(); }, []);
+  useEffect(() => { syncCoinbase(); syncBinance(); syncLedger(); }, []);
 
   // Fetch dashboard picks on mount
   useEffect(() => { fetchDashPicks(); }, []);
@@ -2404,6 +2474,22 @@ export default function App() {
       if (d.error) setBnE(d.error); else { setBn(d.holdings||[]); setBnL(nowTime()); }
     } catch { setBnE("Could not connect — check BINANCE_API_KEY and BINANCE_API_SECRET in .env"); }
     setBnS(false);
+  }
+
+  async function syncLedger() {
+    if (!ledgerAddrs.length) return;
+    setLdgS(true); setLdgE("");
+    try {
+      const r = await fetch("/api/ledger/balances", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ addresses: ledgerAddrs }),
+      });
+      const d = await r.json();
+      if (d.error) setLdgE(d.error);
+      else { setLdg(d.holdings || []); setLdgL(nowTime()); }
+    } catch { setLdgE("Failed to fetch Ledger balances"); }
+    setLdgS(false);
   }
 
   async function fetchDashPicks(force = false) {
@@ -2459,7 +2545,7 @@ export default function App() {
       .finally(() => setCallsPriceFetching(false));
   }, [tab]);
 
-  const allHoldings = [...cbHoldings,...bnHoldings,...cmcHoldings];
+  const allHoldings = [...cbHoldings,...bnHoldings,...ldgHoldings,...cmcHoldings];
 
   useEffect(() => {
     if (tab !== "coach" || allHoldings.length === 0) return;
@@ -3125,7 +3211,7 @@ export default function App() {
 
               <div className="fu2" style={{display:"flex",gap:6,marginBottom:24,flexWrap:"wrap"}}>
                 {PORT_TABS.map(t=>{
-                  const count=t.id==="all"?allHoldings.length:t.id==="coinbase"?cbHoldings.length:t.id==="binance"?bnHoldings.length:cmcHoldings.length;
+                  const count=t.id==="all"?allHoldings.length:t.id==="coinbase"?cbHoldings.length:t.id==="binance"?bnHoldings.length:t.id==="ledger"?ldgHoldings.length:cmcHoldings.length;
                   const isActive=portTab===t.id;
                   return (
                     <button key={t.id} onClick={()=>setPortTab(t.id)} style={{background:isActive?`${t.color}18`:"none",border:`1px solid ${isActive?`${t.color}50`:"var(--border)"}`,borderRadius:10,padding:"8px 20px",fontSize:12,fontWeight:isActive?600:400,color:isActive?t.color:"var(--muted2)"}}>
@@ -3171,10 +3257,11 @@ export default function App() {
                 ) : (
                   <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:14,padding:"56px 32px",textAlign:"center"}}>
                     <p style={{color:"var(--muted2)",fontSize:15,fontFamily:"var(--ff-head)",fontWeight:600,marginBottom:10}}>No holdings yet</p>
-                    <p style={{color:"var(--muted)",fontSize:13,marginBottom:28}}>Connect Coinbase, Binance, or import your CMC CSV to get started.</p>
+                    <p style={{color:"var(--muted)",fontSize:13,marginBottom:28}}>Connect Coinbase, Binance, Ledger, or import your CMC CSV to get started.</p>
                     <div style={{display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap"}}>
                       <button onClick={syncCoinbase} style={{background:"none",border:"1px solid var(--amber)50",borderRadius:10,padding:"10px 20px",fontSize:12,color:"var(--amber)"}}>Sync Coinbase</button>
                       <button onClick={syncBinance} style={{background:"none",border:"1px solid #F0B90B50",borderRadius:10,padding:"10px 20px",fontSize:12,color:"#F0B90B"}}>Sync Binance</button>
+                      <button onClick={()=>setPortTab("ledger")} style={{background:"none",border:"1px solid #41a5f550",borderRadius:10,padding:"10px 20px",fontSize:12,color:"#41a5f5"}}>Add Ledger</button>
                       <button onClick={()=>setPortTab("cmc")} style={{background:"none",border:"1px solid #448aff50",borderRadius:10,padding:"10px 20px",fontSize:12,color:"var(--blue)"}}>Import CMC CSV</button>
                     </div>
                   </div>
@@ -3187,6 +3274,15 @@ export default function App() {
 
               {portTab==="binance"&&(
                 <SourcePanel label="Binance" color="#F0B90B" holdings={bnHoldings} livePrices={livePrices} syncing={bnSyncing} lastSync={bnLastSync} error={bnError} onSync={syncBinance} onRemove={sym=>setBn(p=>p.filter(h=>h.sym!==sym))} onViewChart={h=>openDetail({sym:h.sym,name:h.name,priceType:h.priceType,priceCurrency:h.priceCurrency||"USD",sector:h.sector})} onTrade={cfg=>setTradeModal({...cfg,exchange:"binance"})} displayCcy={displayCcy} audUsd={audUsd}/>
+              )}
+
+              {portTab==="ledger"&&(
+                <div>
+                  {ldgHoldings.length>0&&(
+                    <SourcePanel label="Ledger" color="#41a5f5" holdings={ldgHoldings} livePrices={livePrices} syncing={ldgSyncing} lastSync={ldgLastSync} error={ldgError} onSync={syncLedger} onRemove={sym=>setLdg(p=>p.filter(h=>h.sym!==sym))} onViewChart={h=>openDetail({sym:h.sym,name:h.name,priceType:h.priceType,priceCurrency:h.priceCurrency||"USD",sector:h.sector})} displayCcy={displayCcy} audUsd={audUsd}/>
+                  )}
+                  <LedgerAddressManager addresses={ledgerAddrs} onAdd={a=>{setLedgerAddrs(p=>[...p,a]);setTimeout(syncLedger,100);}} onRemove={i=>{setLedgerAddrs(p=>p.filter((_,j)=>j!==i));setTimeout(syncLedger,100);}}/>
+                </div>
               )}
 
               {portTab==="cmc"&&(
@@ -3481,7 +3577,7 @@ export default function App() {
                 <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:14,padding:"52px 32px",textAlign:"center"}}>
                   <div style={{fontSize:40,marginBottom:16,opacity:.25}}>◭</div>
                   <p style={{color:"var(--muted2)",fontSize:15,fontFamily:"var(--ff-head)",fontWeight:700,marginBottom:8}}>No portfolio connected.</p>
-                  <p style={{color:"var(--muted)",fontSize:13,marginBottom:24}}>Connect Coinbase, Binance, or import a CMC CSV to get AI coaching.</p>
+                  <p style={{color:"var(--muted)",fontSize:13,marginBottom:24}}>Connect Coinbase, Binance, Ledger, or import a CMC CSV to get AI coaching.</p>
                   <button onClick={()=>setTab("portfolio")} style={{background:"var(--green)18",border:"1px solid var(--green)40",borderRadius:8,padding:"8px 20px",fontSize:11,color:"var(--green)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em"}}>GO TO PORTFOLIO →</button>
                 </div>
               ) : coachLoading && !coachReport ? (

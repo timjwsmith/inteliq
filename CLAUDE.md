@@ -42,9 +42,10 @@ A full-stack React + Express investment dashboard. Live stock/crypto data, AI-po
 - "Save to Watchlist" button on every result
 
 ### Portfolio
-- Sources: Coinbase (CDP JWT auth), Binance (HMAC-SHA256), CMC Invest CSV import
+- Sources: Coinbase (CDP JWT auth), Binance (HMAC-SHA256), Ledger (public address lookup), CMC Invest CSV import
+- Ledger: read-only, no API keys; user pastes BTC/ETH/SOL public addresses; balances from Blockchair + Solana RPC; addresses stored in localStorage (`inteliq_ledger_addrs`); no cost basis (avg=0); no trading
 - Every holding has a CHART button (expand a row to see it) — opens the full detail page
-- All Holdings, Coinbase, Binance, and CMC tabs all have chart access
+- All Holdings, Coinbase, Binance, Ledger, and CMC tabs all have chart access
 - Live prices fetched in batch; crypto uses a single CoinGecko call (avoids rate limits)
 - ← BACK on the detail page returns to the correct originating tab
 
@@ -93,6 +94,7 @@ A full-stack React + Express investment dashboard. Live stock/crypto data, AI-po
 - GET  `/api/binance/balances` — Binance spot balances + VWAP cost basis (HMAC-SHA256)
 - GET  `/api/binance/aud-balance` — Binance available AUD balance for trading
 - POST `/api/binance/order` — Binance MARKET order (AUD pairs, fallback USDT)
+- POST `/api/ledger/balances` — Ledger public address lookup; accepts `{ addresses: [{address, chain}] }` where chain is BTC/ETH/SOL; queries Blockchair (BTC/ETH) + Solana RPC (SOL); aggregates per chain; no API key needed
 - GET  `/api/news` — Yahoo Finance RSS aggregated + tagged, cached 15 min
 - GET  `/api/ipo` — Finnhub IPO calendar (NASDAQ/NYSE/ASX/CBOE, 14d back → 90d ahead), cached 4h; returns `[]` if no `FINNHUB_API_KEY`
 - GET  `/api/dashboard/picks` — AI-generated top 3 picks, cached 4h (`?force=1` to bust)

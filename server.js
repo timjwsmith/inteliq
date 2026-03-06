@@ -1455,6 +1455,57 @@ Provide 2-4 specific, concrete actions.`,
   }
 });
 
+// ── Ledger (public address lookup) ────────────────────────────────────────
+app.post("/api/ledger/balances", async (req, res) => {
+  try {
+    const { addresses } = req.body;
+    if (!Array.isArray(addresses) || !addresses.length) return res.json({ holdings: [], lastSync: new Date().toISOString() });
+
+    const chainBalances = {}; // { BTC: totalQty, ETH: totalQty, SOL: totalQty }
+
+    for (const { address, chain } of addresses) {
+      if (!address || !chain) continue;
+      const c = chain.toUpperCase();
+      let balance = 0;
+
+      if (c === "BTC") {
+        const r = await fetch(`https://api.blockchair.com/bitcoin/dashboards/address/${address}`);
+        const d = await r.json();
+        const bal = d?.data?.[address]?.address?.balance;
+        if (bal != null) balance = bal / 1e8;
+      } else if (c === "ETH") {
+        const r = await fetch(`https://api.blockchair.com/ethereum/dashboards/address/${address}`);
+        const d = await r.json();
+        const bal = d?.data?.[address]?.address?.balance;
+        if (bal != null) balance = Number(bal) / 1e18;
+      } else if (c === "SOL") {
+        const r = await fetch("https://api.mainnet-beta.solana.com", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getBalance", params: [address] }),
+        });
+        const d = await r.json();
+        if (d?.result?.value != null) balance = d.result.value / 1e9;
+      }
+
+      chainBalances[c] = (chainBalances[c] || 0) + balance;
+    }
+
+    const nameMap = { BTC: "Bitcoin", ETH: "Ethereum", SOL: "Solana" };
+    const holdings = Object.entries(chainBalances)
+      .filter(([, qty]) => qty > 0)
+      .map(([sym, qty]) => ({
+        sym, name: nameMap[sym] || sym, qty, avg: 0, avgCurrency: "USD",
+        sector: "Crypto", horizon: "Medium", priceType: "crypto", source: "ledger",
+      }));
+
+    res.json({ holdings, lastSync: new Date().toISOString() });
+  } catch (err) {
+    console.error("Ledger balance error:", err.message || err);
+    res.status(500).json({ error: "Failed to fetch Ledger balances" });
+  }
+});
+
 // ── Health ─────────────────────────────────────────────────────────────────
 app.get("/health", (_, res) => res.json({
   status: "ok",
