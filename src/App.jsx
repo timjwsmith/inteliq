@@ -152,7 +152,7 @@ const TABS = [
 const PORT_TABS = [
   { id:"all",      label:"All",        color:"var(--text2)" },
   { id:"coinbase", label:"Coinbase",   color:"var(--amber)" },
-  { id:"coinspot", label:"CoinSpot",   color:"var(--green)" },
+  { id:"binance",  label:"Binance",    color:"#F0B90B" },
   { id:"cmc",      label:"CMC Invest", color:"var(--blue)"  },
 ];
 
@@ -289,7 +289,7 @@ function ConvictionDots({ level }) {
 }
 
 function SourceBadge({ source }) {
-  const m = { coinbase:{l:"CB",c:"var(--amber)"}, coinspot:{l:"CS",c:"var(--green)"}, cmc:{l:"CMC",c:"var(--blue)"} };
+  const m = { coinbase:{l:"CB",c:"var(--amber)"}, binance:{l:"BN",c:"#F0B90B"}, cmc:{l:"CMC",c:"var(--blue)"} };
   const s = m[source] || { l:"?", c:"var(--muted)" };
   return <span className="badge" style={{ background:`${s.c}20`, color:s.c, border:`1px solid ${s.c}40` }}>{s.l}</span>;
 }
@@ -1865,8 +1865,10 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
 // ── Trade Modal ─────────────────────────────────────────────────────────────
 function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
   const { sym, name } = config;
-  const tradeCcy = displayCcy === "AUD" ? "AUD" : "USD";
-  const ccySymbol = tradeCcy === "AUD" ? "A$" : "$";
+  const [exchange, setExchange] = useState(config.exchange || null);
+  const isBinance = exchange === "binance";
+  const tradeCcy = "USD";
+  const ccySymbol = "$";
 
   const [side, setSide] = useState(config.side || "BUY");
   const [step, setStep] = useState(1);
@@ -1877,49 +1879,110 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
   const [livePrice, setLivePrice] = useState(null);
   const [result, setResult] = useState(null);
   const [placing, setPlacing] = useState(false);
+  const [bnTicker, setBnTicker] = useState(null);
 
+  // Fetch prices from both exchanges for comparison
   useEffect(() => {
-    fetch("/api/coinbase/usd-balance")
+    fetch(`/api/binance/ticker/${sym}`)
       .then(r => r.json())
-      .then(d => { setAvailBal(tradeCcy === "AUD" ? (d.availableAUD ?? null) : (d.available ?? null)); setUsdcBal(d.availableUSDC ?? null); })
-      .catch(() => setAvailBal(null));
-    fetch(`/api/chart?sym=${sym}&range=1d&type=crypto`)
+      .then(d => { if (d.price) setBnTicker(d); })
+      .catch(() => {});
+    fetch(`/api/chart/${sym}?range=1d`)
       .then(r => r.json())
       .then(d => { if (d.currentPrice) setLivePrice(d.currentPrice); })
       .catch(() => {});
-  }, [sym, tradeCcy]);
+  }, [sym]);
 
-  // livePrice from chart is in USD; convert for display
-  const livePriceDisplay = livePrice != null
-    ? (tradeCcy === "AUD" ? livePrice / 0.635 : livePrice)  // rough conversion for estimate only
-    : null;
+  // Fetch balance when exchange changes
+  useEffect(() => {
+    if (!exchange) return;
+    setAvailBal(null); setUsdcBal(null);
+    if (isBinance) {
+      fetch("/api/binance/usdt-balance")
+        .then(r => r.json())
+        .then(d => { setAvailBal(d.available ?? null); })
+        .catch(() => setAvailBal(null));
+    } else {
+      fetch("/api/coinbase/usd-balance")
+        .then(r => r.json())
+        .then(d => { setAvailBal(d.available ?? null); setUsdcBal(d.availableUSDC ?? null); })
+        .catch(() => setAvailBal(null));
+    }
+  }, [exchange, isBinance]);
+
+  // Auto-select cheaper exchange when none specified
+  useEffect(() => {
+    if (exchange) return;
+    if (bnTicker && livePrice) {
+      const bnEff = bnTicker.price * 1.001;
+      const cbEff = livePrice * 1.006;
+      setExchange(bnEff <= cbEff ? "binance" : "coinbase");
+    } else if (bnTicker && !livePrice) {
+      setExchange("binance");
+    } else if (!bnTicker && livePrice) {
+      setExchange("coinbase");
+    }
+  }, [bnTicker, livePrice, exchange]);
+
+  // Determine which exchange is cheaper (for badge)
+  const cheaper = (() => {
+    if (!bnTicker?.price || !livePrice) return null;
+    const bnEff = bnTicker.price * 1.001;  // 0.10% fee
+    const cbEff = livePrice * 1.006;       // 0.60% fee
+    return side === "BUY" ? (bnEff <= cbEff ? "binance" : "coinbase") : (bnEff >= cbEff ? "binance" : "coinbase");
+  })();
+
+  const livePriceDisplay = isBinance && bnTicker?.price ? bnTicker.price : livePrice;
   const estQty = side === "BUY" && livePriceDisplay && parseFloat(quoteAmount) > 0
     ? (parseFloat(quoteAmount) / livePriceDisplay).toFixed(6) : null;
 
-  const canReview = side === "BUY" ? !!parseFloat(quoteAmount) : !!parseFloat(cryptoQty);
+  const canReview = exchange && (side === "BUY" ? !!parseFloat(quoteAmount) : !!parseFloat(cryptoQty));
 
   async function placeOrder() {
     setPlacing(true);
     try {
-      const body = { sym, side, tradeCcy, orderType: "market", audUsd };
-      if (side === "BUY") body.quoteSize = parseFloat(quoteAmount);
-      else body.baseSize = parseFloat(cryptoQty);
-      const r = await fetch("/api/coinbase/order", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await r.json();
-      if (r.ok && data.success && data.success_response?.order_id) {
-        setResult({
-          ok: true,
-          orderId: data.success_response.order_id,
-          productId: data._productId,
-          status: data.order?.status || "OPEN",
+      let r, data;
+      if (isBinance) {
+        const body = { sym, side };
+        if (side === "BUY") body.quoteAmount = parseFloat(quoteAmount);
+        else body.qty = parseFloat(cryptoQty);
+        r = await fetch("/api/binance/order", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
         });
+        data = await r.json();
+        if (r.ok && data.success) {
+          setResult({
+            ok: true,
+            orderId: String(data.orderId),
+            productId: data.symbol,
+            status: data.status || "FILLED",
+          });
+        } else {
+          setResult({ ok: false, error: data.error || JSON.stringify(data) });
+        }
       } else {
-        const errMsg = data.error_response?.message || data.message || data.errors?.[0]?.message || data.error || JSON.stringify(data);
-        setResult({ ok: false, error: errMsg });
+        const body = { sym, side, tradeCcy, orderType: "market", audUsd };
+        if (side === "BUY") body.quoteSize = parseFloat(quoteAmount);
+        else body.baseSize = parseFloat(cryptoQty);
+        r = await fetch("/api/coinbase/order", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        data = await r.json();
+        if (r.ok && data.success && data.success_response?.order_id) {
+          setResult({
+            ok: true,
+            orderId: data.success_response.order_id,
+            productId: data._productId,
+            status: data.order?.status || "OPEN",
+          });
+        } else {
+          const errMsg = data.error_response?.message || data.message || data.errors?.[0]?.message || data.error || JSON.stringify(data);
+          setResult({ ok: false, error: errMsg });
+        }
       }
     } catch (e) {
       setResult({ ok: false, error: e.message });
@@ -1937,7 +2000,7 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:22 }}>
           <div>
             <h2 style={{ fontFamily:"var(--ff-head)", fontSize:20, fontWeight:800, color:"var(--text2)", margin:0 }}>Trade {sym}</h2>
-            <p style={{ fontSize:11, color:"var(--muted)", fontFamily:"var(--ff-mono)", margin:"4px 0 0", letterSpacing:"0.06em" }}>{name} · Coinbase · {sym}/{tradeCcy}</p>
+            <p style={{ fontSize:11, color:"var(--muted)", fontFamily:"var(--ff-mono)", margin:"4px 0 0", letterSpacing:"0.06em" }}>{name} · {exchange ? (isBinance ? "Binance" : "Coinbase") : "Select exchange"} · {sym}/{tradeCcy}</p>
           </div>
           <button onClick={onClose} style={{ background:"none", border:"none", color:"var(--muted2)", fontSize:20, cursor:"pointer", lineHeight:1 }}>✕</button>
         </div>
@@ -1948,6 +2011,33 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
 
         {step === 1 && (
           <>
+            <div style={{ marginBottom:18 }}>
+              <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>EXCHANGE</div>
+              <div style={{ display:"flex", gap:8 }}>
+                {[
+                  { id:"coinbase", label:"Coinbase", color:"var(--amber)", price:livePrice, fee:"0.60" },
+                  { id:"binance", label:"Binance", color:"#F0B90B", price:bnTicker?.price, fee:"0.10" },
+                ].map(ex => {
+                  const isActive = exchange === ex.id;
+                  const isCheaper = cheaper === ex.id;
+                  const priceStr = ex.price ? `$${ex.price.toLocaleString("en",{maximumFractionDigits:2})}` : "—";
+                  return (
+                    <button key={ex.id} onClick={() => setExchange(ex.id)} style={{
+                      flex:1, background:isActive?`${ex.color}18`:"var(--card)",
+                      border:`1px solid ${isActive?`${ex.color}60`:"var(--border)"}`,
+                      borderRadius:10, padding:"10px 14px", cursor:"pointer", textAlign:"left", position:"relative"
+                    }}>
+                      <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:4 }}>
+                        <span style={{ fontSize:11, fontWeight:700, color:isActive?ex.color:"var(--muted2)", fontFamily:"var(--ff-head)" }}>{ex.label}</span>
+                        {isCheaper && <span style={{ fontSize:8, fontFamily:"var(--ff-mono)", color:"var(--green)", background:"#00e67618", border:"1px solid #00e67640", borderRadius:4, padding:"1px 5px", letterSpacing:"0.06em" }}>CHEAPER</span>}
+                      </div>
+                      <div style={{ fontSize:14, fontFamily:"var(--ff-mono)", color:"var(--text2)", fontWeight:600, marginBottom:2 }}>{priceStr}</div>
+                      <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em" }}>FEE: {ex.fee}%</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
             <div style={{ display:"flex", gap:8, marginBottom:18 }}>
               {["BUY","SELL"].map(s => (
                 <button key={s} onClick={() => setSide(s)} style={{ ...btnBase, flex:1,
@@ -1959,17 +2049,22 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
               ))}
             </div>
             <div style={{ marginBottom:18 }}>
-              <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>{tradeCcy} AVAILABLE</div>
+              <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>{isBinance ? "USDT" : "USD"} AVAILABLE</div>
               <div style={{ fontSize:16, fontFamily:"var(--ff-mono)", color:"var(--text2)", fontWeight:600 }}>
-                {availBal != null ? `${ccySymbol}${availBal.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}` : "Loading…"}
+                {!exchange ? "—" : availBal != null ? `${ccySymbol}${availBal.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}` : "Loading…"}
               </div>
-              {usdcBal != null && <div style={{ fontSize:10, fontFamily:"var(--ff-mono)", color:"var(--muted)", marginTop:4 }}>
+              {!isBinance && usdcBal != null && <div style={{ fontSize:10, fontFamily:"var(--ff-mono)", color:"var(--muted)", marginTop:4 }}>
                 USDC: ${usdcBal.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}
               </div>}
             </div>
-            {side === "BUY" && usdcBal != null && usdcBal <= 0 && availBal != null && availBal <= 0 && (
+            {side === "BUY" && !isBinance && usdcBal != null && usdcBal <= 0 && availBal != null && availBal <= 0 && (
               <div style={{ background:"#ffab4010", border:"1px solid #ffab4040", borderRadius:10, padding:"10px 14px", fontSize:11, color:"var(--amber)", marginBottom:18, lineHeight:1.5 }}>
                 No USDC or USD available. Coinbase Advanced Trade uses USDC/USD for buying. Buy some USDC in the Coinbase app first, then sync and retry.
+              </div>
+            )}
+            {side === "BUY" && isBinance && availBal != null && availBal <= 0 && (
+              <div style={{ background:"#ffab4010", border:"1px solid #ffab4040", borderRadius:10, padding:"10px 14px", fontSize:11, color:"var(--amber)", marginBottom:18, lineHeight:1.5 }}>
+                No USDT available. Deposit or buy USDT on Binance to start trading.
               </div>
             )}
             {side === "BUY" && (
@@ -1996,6 +2091,7 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
           <>
             <div style={{ background:"var(--card)", border:"1px solid var(--border)", borderRadius:12, padding:"18px 20px", marginBottom:20 }}>
               {[
+                { l:"EXCHANGE", v:isBinance ? "Binance" : "Coinbase" },
                 { l:"ASSET", v:sym },
                 { l:"SIDE", v:side },
                 side === "BUY" && { l:"SPEND", v:`${ccySymbol}${parseFloat(quoteAmount).toFixed(2)} ${tradeCcy}` },
@@ -2037,7 +2133,7 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
                 </>
               )}
             </div>
-            <button onClick={() => { result.ok ? onSuccess() : onClose(); }}
+            <button onClick={() => { result.ok ? onSuccess(exchange) : onClose(); }}
               style={{ ...btnBase, width:"100%", background: result.ok ? "var(--green)" : "var(--card)", color: result.ok ? "#0a0a14" : "var(--muted2)", border: result.ok ? "none" : "1px solid var(--border)" }}>
               DONE
             </button>
@@ -2123,10 +2219,10 @@ export default function App() {
   const [cbLastSync,setCbL]= useState(null);
   const [cbError,setCbE]   = useState("");
 
-  const [csHoldings,setCs] = useState([]);
-  const [csSyncing,setCsS] = useState(false);
-  const [csLastSync,setCsL]= useState(null);
-  const [csError,setCsE]   = useState("");
+  const [bnHoldings,setBn] = useState([]);
+  const [bnSyncing,setBnS] = useState(false);
+  const [bnLastSync,setBnL]= useState(null);
+  const [bnError,setBnE]   = useState("");
 
   const [cmcHoldings,setCmc] = useState(() => {
     try { return JSON.parse(localStorage.getItem("inteliq_cmc") || "[]"); } catch { return []; }
@@ -2267,7 +2363,7 @@ export default function App() {
   // Fetch live prices whenever holdings, watchlist, or dashboard picks change
   useEffect(() => {
     const all = [
-      ...cbHoldings, ...csHoldings, ...cmcHoldings,
+      ...cbHoldings, ...bnHoldings, ...cmcHoldings,
       ...dashPicks.map(s => ({ sym:s.sym, priceType:s.priceType })),
       ...watchlist.map(w => ({ sym:w.sym, priceType:w.priceType })),
     ];
@@ -2275,10 +2371,10 @@ export default function App() {
     if (!unique.length) return;
     fetch("/api/prices", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({symbols:unique}) })
       .then(r=>r.json()).then(d=>setLP(p=>({...p,...d}))).catch(()=>{});
-  }, [cbHoldings,csHoldings,cmcHoldings,dashPicks,watchlist]);
+  }, [cbHoldings,bnHoldings,cmcHoldings,dashPicks,watchlist]);
 
   // Sync exchanges on mount
-  useEffect(() => { syncCoinbase(); syncCoinspot(); }, []);
+  useEffect(() => { syncCoinbase(); syncBinance(); }, []);
 
   // Fetch dashboard picks on mount
   useEffect(() => { fetchDashPicks(); }, []);
@@ -2301,13 +2397,13 @@ export default function App() {
     setCbS(false);
   }
 
-  async function syncCoinspot() {
-    setCsS(true); setCsE("");
+  async function syncBinance() {
+    setBnS(true); setBnE("");
     try {
-      const r = await fetch("/api/coinspot/balances"); const d = await r.json();
-      if (d.error) setCsE(d.error); else { setCs(d.holdings||[]); setCsL(nowTime()); }
-    } catch { setCsE("Could not connect — check COINSPOT_API_KEY and COINSPOT_API_SECRET in .env"); }
-    setCsS(false);
+      const r = await fetch("/api/binance/balances"); const d = await r.json();
+      if (d.error) setBnE(d.error); else { setBn(d.holdings||[]); setBnL(nowTime()); }
+    } catch { setBnE("Could not connect — check BINANCE_API_KEY and BINANCE_API_SECRET in .env"); }
+    setBnS(false);
   }
 
   async function fetchDashPicks(force = false) {
@@ -2363,7 +2459,7 @@ export default function App() {
       .finally(() => setCallsPriceFetching(false));
   }, [tab]);
 
-  const allHoldings = [...cbHoldings,...csHoldings,...cmcHoldings];
+  const allHoldings = [...cbHoldings,...bnHoldings,...cmcHoldings];
 
   useEffect(() => {
     if (tab !== "coach" || allHoldings.length === 0) return;
@@ -3029,7 +3125,7 @@ export default function App() {
 
               <div className="fu2" style={{display:"flex",gap:6,marginBottom:24,flexWrap:"wrap"}}>
                 {PORT_TABS.map(t=>{
-                  const count=t.id==="all"?allHoldings.length:t.id==="coinbase"?cbHoldings.length:t.id==="coinspot"?csHoldings.length:cmcHoldings.length;
+                  const count=t.id==="all"?allHoldings.length:t.id==="coinbase"?cbHoldings.length:t.id==="binance"?bnHoldings.length:cmcHoldings.length;
                   const isActive=portTab===t.id;
                   return (
                     <button key={t.id} onClick={()=>setPortTab(t.id)} style={{background:isActive?`${t.color}18`:"none",border:`1px solid ${isActive?`${t.color}50`:"var(--border)"}`,borderRadius:10,padding:"8px 20px",fontSize:12,fontWeight:isActive?600:400,color:isActive?t.color:"var(--muted2)"}}>
@@ -3066,7 +3162,7 @@ export default function App() {
                             const avgUSD   = toDisplay(h.avg, h.avgCurrency || "USD", "USD", audUsd);
                             const valueUSD = priceUSD != null ? h.qty * priceUSD : h.qty * avgUSD;
                             const weight   = totalPortUSD > 0 ? (valueUSD / totalPortUSD) * 100 : null;
-                            return <HoldingRow key={`${h.source}-${h.sym}`} holding={h} livePrice={livePrices[h.sym]} expanded={portExp===`${h.source}-${h.sym}`} onToggle={()=>setPortExp(p=>p===`${h.source}-${h.sym}`?null:`${h.source}-${h.sym}`)} onRemove={h.source==="cmc"?()=>setCmc(p=>p.filter(x=>x.sym!==h.sym)):null} onViewChart={()=>openDetail({sym:h.sym,name:h.name,priceType:h.priceType,priceCurrency:h.priceCurrency||"USD",sector:h.sector})} onTrade={h.source==="coinbase"?cfg=>setTradeModal(cfg):null} displayCcy={displayCcy} audUsd={audUsd} portWeight={weight}/>;
+                            return <HoldingRow key={`${h.source}-${h.sym}`} holding={h} livePrice={livePrices[h.sym]} expanded={portExp===`${h.source}-${h.sym}`} onToggle={()=>setPortExp(p=>p===`${h.source}-${h.sym}`?null:`${h.source}-${h.sym}`)} onRemove={h.source==="cmc"?()=>setCmc(p=>p.filter(x=>x.sym!==h.sym)):null} onViewChart={()=>openDetail({sym:h.sym,name:h.name,priceType:h.priceType,priceCurrency:h.priceCurrency||"USD",sector:h.sector})} onTrade={(h.source==="coinbase"||h.source==="binance")?cfg=>setTradeModal({...cfg,exchange:h.source}):null} displayCcy={displayCcy} audUsd={audUsd} portWeight={weight}/>;
                           });
                         })()}
                       </div>
@@ -3075,10 +3171,10 @@ export default function App() {
                 ) : (
                   <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:14,padding:"56px 32px",textAlign:"center"}}>
                     <p style={{color:"var(--muted2)",fontSize:15,fontFamily:"var(--ff-head)",fontWeight:600,marginBottom:10}}>No holdings yet</p>
-                    <p style={{color:"var(--muted)",fontSize:13,marginBottom:28}}>Connect Coinbase, CoinSpot, or import your CMC CSV to get started.</p>
+                    <p style={{color:"var(--muted)",fontSize:13,marginBottom:28}}>Connect Coinbase, Binance, or import your CMC CSV to get started.</p>
                     <div style={{display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap"}}>
                       <button onClick={syncCoinbase} style={{background:"none",border:"1px solid var(--amber)50",borderRadius:10,padding:"10px 20px",fontSize:12,color:"var(--amber)"}}>Sync Coinbase</button>
-                      <button onClick={syncCoinspot} style={{background:"none",border:"1px solid var(--green)50",borderRadius:10,padding:"10px 20px",fontSize:12,color:"var(--green)"}}>Sync CoinSpot</button>
+                      <button onClick={syncBinance} style={{background:"none",border:"1px solid #F0B90B50",borderRadius:10,padding:"10px 20px",fontSize:12,color:"#F0B90B"}}>Sync Binance</button>
                       <button onClick={()=>setPortTab("cmc")} style={{background:"none",border:"1px solid #448aff50",borderRadius:10,padding:"10px 20px",fontSize:12,color:"var(--blue)"}}>Import CMC CSV</button>
                     </div>
                   </div>
@@ -3089,8 +3185,8 @@ export default function App() {
                 <SourcePanel label="Coinbase" color="var(--amber)" holdings={cbHoldings} livePrices={livePrices} syncing={cbSyncing} lastSync={cbLastSync} error={cbError} onSync={syncCoinbase} onRemove={sym=>setCb(p=>p.filter(h=>h.sym!==sym))} onViewChart={h=>openDetail({sym:h.sym,name:h.name,priceType:h.priceType,priceCurrency:h.priceCurrency||"USD",sector:h.sector})} onTrade={cfg=>setTradeModal(cfg)} displayCcy={displayCcy} audUsd={audUsd}/>
               )}
 
-              {portTab==="coinspot"&&(
-                <SourcePanel label="CoinSpot" color="var(--green)" holdings={csHoldings} livePrices={livePrices} syncing={csSyncing} lastSync={csLastSync} error={csError} onSync={syncCoinspot} onRemove={sym=>setCs(p=>p.filter(h=>h.sym!==sym))} onViewChart={h=>openDetail({sym:h.sym,name:h.name,priceType:h.priceType,priceCurrency:h.priceCurrency||"USD",sector:h.sector})} displayCcy={displayCcy} audUsd={audUsd}/>
+              {portTab==="binance"&&(
+                <SourcePanel label="Binance" color="#F0B90B" holdings={bnHoldings} livePrices={livePrices} syncing={bnSyncing} lastSync={bnLastSync} error={bnError} onSync={syncBinance} onRemove={sym=>setBn(p=>p.filter(h=>h.sym!==sym))} onViewChart={h=>openDetail({sym:h.sym,name:h.name,priceType:h.priceType,priceCurrency:h.priceCurrency||"USD",sector:h.sector})} onTrade={cfg=>setTradeModal({...cfg,exchange:"binance"})} displayCcy={displayCcy} audUsd={audUsd}/>
               )}
 
               {portTab==="cmc"&&(
@@ -3385,7 +3481,7 @@ export default function App() {
                 <div style={{background:"var(--card)",border:"1px solid var(--border)",borderRadius:14,padding:"52px 32px",textAlign:"center"}}>
                   <div style={{fontSize:40,marginBottom:16,opacity:.25}}>◭</div>
                   <p style={{color:"var(--muted2)",fontSize:15,fontFamily:"var(--ff-head)",fontWeight:700,marginBottom:8}}>No portfolio connected.</p>
-                  <p style={{color:"var(--muted)",fontSize:13,marginBottom:24}}>Connect Coinbase, CoinSpot, or import a CMC CSV to get AI coaching.</p>
+                  <p style={{color:"var(--muted)",fontSize:13,marginBottom:24}}>Connect Coinbase, Binance, or import a CMC CSV to get AI coaching.</p>
                   <button onClick={()=>setTab("portfolio")} style={{background:"var(--green)18",border:"1px solid var(--green)40",borderRadius:8,padding:"8px 20px",fontSize:11,color:"var(--green)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em"}}>GO TO PORTFOLIO →</button>
                 </div>
               ) : coachLoading && !coachReport ? (
@@ -4207,7 +4303,7 @@ export default function App() {
         </main>
       </div>
       {tradeModal && (
-        <TradeModal config={tradeModal} onClose={()=>setTradeModal(null)} onSuccess={()=>{setTradeModal(null);syncCoinbase();}} displayCcy={displayCcy} audUsd={audUsd} />
+        <TradeModal config={tradeModal} onClose={()=>setTradeModal(null)} onSuccess={(ex)=>{setTradeModal(null);ex==="binance"?syncBinance():syncCoinbase();}} displayCcy={displayCcy} audUsd={audUsd} />
       )}
       <GlossaryModal open={glossaryOpen} onClose={()=>setGlossaryOpen(false)} focusTerm={glossaryTerm} allGlossary={allGlossary}/>
     </>
