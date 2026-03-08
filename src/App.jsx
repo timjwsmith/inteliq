@@ -2288,6 +2288,7 @@ export default function App() {
   const [dashPicks,setDashPicks]     = useState([]);
   const [dashLoading,setDashLoading] = useState(false);
   const [dashError,setDashError]     = useState(null);
+  const [dashStatus,setDashStatus]   = useState(null);
 
   // Explorer
   const [searchQ,setSearchQ]       = useState("");
@@ -2557,19 +2558,39 @@ export default function App() {
 
   async function fetchDashPicks(force = false) {
     if (dashLoading) return;
-    setDashLoading(true); setDashError(null);
+    setDashLoading(true); setDashError(null); setDashStatus(null);
     if (force) setDashPicks([]);
     try {
-      const url = force ? "/api/dashboard/picks?force=1" : "/api/dashboard/picks";
+      const url = force ? "/api/dashboard/picks/stream?force=1" : "/api/dashboard/picks/stream";
       const r = await fetch(url);
-      const d = await r.json();
-      if (Array.isArray(d) && d.length > 0) {
-        setDashPicks(d);
-        d.filter(pick => ["BUY","WATCH"].includes(pick.verdict)).forEach(pick => recordCall({ ...pick, priceAtCall: pick.priceStatic }, "dashboard"));
-        const allText = d.map(p => [p.summary,p.macro,p.fundamental,p.technical,p.sentiment,p.portfolio].filter(Boolean).join(" ")).join(" ");
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let picks = null;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ") || line.includes("[DONE]")) continue;
+          try {
+            const evt = JSON.parse(line.slice(6));
+            if (evt.error) throw new Error(evt.error);
+            if (evt.status === "done" && evt.picks) { picks = evt.picks; }
+            else if (evt.status) { setDashStatus(evt.status); }
+          } catch (e) { if (e.message && !e.message.includes("JSON")) throw e; }
+        }
+      }
+      setDashStatus(null);
+      if (Array.isArray(picks) && picks.length > 0) {
+        setDashPicks(picks);
+        picks.filter(pick => ["BUY","WATCH"].includes(pick.verdict)).forEach(pick => recordCall({ ...pick, priceAtCall: pick.priceStatic }, "dashboard"));
+        const allText = picks.map(p => [p.summary,p.macro,p.fundamental,p.technical,p.sentiment,p.portfolio].filter(Boolean).join(" ")).join(" ");
         extractGlossaryTerms(allText);
-      } else setDashError(d.error || "No picks returned");
-    } catch { setDashError("Could not load picks — check your connection"); }
+      } else setDashError("No picks returned");
+    } catch (e) { setDashError(e.message || "Could not load picks — check your connection"); setDashStatus(null); }
     setDashLoading(false);
   }
 
@@ -3033,7 +3054,7 @@ export default function App() {
                     <h1 style={{ fontFamily:"var(--ff-head)", fontSize:28, fontWeight:800, letterSpacing:"-0.03em", color:"var(--text2)", lineHeight:1.2, marginBottom:6 }}>
                       {(()=>{const h=new Date().getHours();return h<12?"Good morning.":h<17?"Good afternoon.":"Good evening.";})()}<br/>
                       <span style={{ color:"var(--muted2)", fontWeight:600, fontSize:22 }}>
-                        {dashLoading ? "Generating picks…" : dashPicks.length > 0 ? `${dashPicks.length} high-conviction picks today.` : "Today's top picks."}
+                        {dashLoading ? (dashStatus || "Generating picks…") : dashPicks.length > 0 ? `${dashPicks.length} high-conviction picks today.` : "Today's top picks."}
                       </span>
                     </h1>
                     <p style={{ fontSize:11, color:"var(--muted)", fontFamily:"var(--ff-mono)", letterSpacing:"0.06em" }}>
@@ -3058,6 +3079,7 @@ export default function App() {
               {/* Loading shimmer */}
               {dashLoading && dashPicks.length === 0 && (
                 <div style={{display:"grid",gap:12,marginBottom:28}}>
+                  {dashStatus&&<div style={{fontSize:13,color:"var(--green)",fontFamily:"var(--ff-head)",fontWeight:600,marginBottom:4,display:"flex",alignItems:"center",gap:8}}><span style={{width:8,height:8,borderRadius:"50%",background:"var(--green)",display:"inline-block",animation:"pulse 1.5s infinite"}}></span>{dashStatus}</div>}
                   {[1,2,3].map(i=>(
                     <div key={i} className="card" style={{padding:20}}>
                       <div style={{display:"flex",gap:12,marginBottom:14,alignItems:"center"}}>
