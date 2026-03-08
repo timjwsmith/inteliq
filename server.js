@@ -42,6 +42,58 @@ app.post("/api/analyse", async (req, res) => {
   }
 });
 
+// ── Streaming analyse proxy (SSE) ────────────────────────────────────────────
+app.post("/api/analyse/stream", async (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  try {
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({ ...req.body, stream: true }),
+    });
+    if (!response.ok) {
+      const err = await response.text();
+      res.write(`data: ${JSON.stringify({ error: err })}\n\n`);
+      res.end();
+      return;
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          const payload = line.slice(6).trim();
+          if (payload === "[DONE]") continue;
+          try {
+            const evt = JSON.parse(payload);
+            if (evt.type === "content_block_delta" && evt.delta?.text) {
+              res.write(`data: ${JSON.stringify({ t: evt.delta.text })}\n\n`);
+            }
+          } catch {}
+        }
+      }
+    }
+    res.write("data: [DONE]\n\n");
+    res.end();
+  } catch (err) {
+    console.error("Stream error:", err.message);
+    res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
+    res.end();
+  }
+});
+
 // ── Live AUD/USD FX rate ───────────────────────────────────────────────────
 let fxCache = { rate: 0.635, ts: 0 };
 
@@ -363,7 +415,16 @@ app.get("/api/binance/usdt-balance", async (req, res) => {
   try {
     const account = await binanceFetch("GET", "/api/v3/account");
     const usdt = (account.balances || []).find(b => b.asset === "USDT");
-    const available = usdt ? parseFloat(usdt.free) : 0;
+    let available = usdt ? parseFloat(usdt.free) : 0;
+    // Also check Funding wallet (deposits land here, not Spot)
+    if (available === 0) {
+      try {
+        const funding = await binanceFetch("POST", "/sapi/v1/asset/get-funding-asset", { asset: "USDT" });
+        if (Array.isArray(funding) && funding.length > 0) {
+          available = parseFloat(funding[0].free || 0);
+        }
+      } catch {}
+    }
     res.json({ available });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -951,6 +1012,59 @@ app.get("/api/dashboard/picks", async (req, res) => {
     const today = new Date().toLocaleDateString("en-AU", {
       weekday: "long", day: "numeric", month: "long", year: "numeric"
     });
+
+    // ── Fetch live market context in parallel ──
+    const [newsCtx, benchCtx, cryptoCtx] = await Promise.allSettled([
+      // Recent news headlines
+      (async () => {
+        if (newsCache.items.length && now - newsCache.ts < 15 * 60 * 1000) return newsCache.items;
+        const feeds = [
+          "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EGSPC,NVDA,MSFT,AAPL,AMD&region=US&lang=en-US",
+          "https://feeds.finance.yahoo.com/rss/2.0/headline?s=BTC-USD,ETH-USD,SOL-USD&region=US&lang=en-US",
+          "https://feeds.finance.yahoo.com/rss/2.0/headline?s=BHP.AX,RIO.AX,PLS.AX,FMG.AX&region=AU&lang=en-AU",
+        ];
+        const results = await Promise.allSettled(feeds.map(u => fetch(u, { headers: { "User-Agent": "Mozilla/5.0" } }).then(r => r.text())));
+        const items = [];
+        for (const r of results) {
+          if (r.status !== "fulfilled") continue;
+          const matches = [...r.value.matchAll(/<item>[\s\S]*?<title><!\[CDATA\[(.*?)\]\]><\/title>[\s\S]*?<\/item>/g)];
+          matches.forEach(m => items.push(m[1]));
+        }
+        return items.slice(0, 12);
+      })(),
+      // Benchmark performance
+      (async () => {
+        const fetchIdx = async (sym) => {
+          const r = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=1mo`, { headers: { "User-Agent": "Mozilla/5.0" } });
+          const d = await r.json();
+          const closes = (d?.chart?.result?.[0]?.indicators?.quote?.[0]?.close || []).filter(c => c != null);
+          if (closes.length < 2) return null;
+          const last = closes[closes.length - 1];
+          return { price: last.toFixed(0), change1d: ((last / closes[closes.length - 2] - 1) * 100).toFixed(2), change1w: ((last / closes[Math.max(0, closes.length - 6)] - 1) * 100).toFixed(2), change1m: ((last / closes[0] - 1) * 100).toFixed(2) };
+        };
+        const [sp, ax] = await Promise.all([fetchIdx("^GSPC"), fetchIdx("^AXJO")]);
+        return { sp500: sp, asx200: ax };
+      })(),
+      // Top crypto prices
+      (async () => {
+        const r = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=usd&include_24hr_change=true");
+        const d = await r.json();
+        return Object.entries(d).map(([k, v]) => `${k}: $${v.usd.toLocaleString()} (${v.usd_24h_change >= 0 ? "+" : ""}${v.usd_24h_change.toFixed(1)}% 24h)`).join(", ");
+      })(),
+    ]);
+
+    const newsHeadlines = newsCtx.status === "fulfilled" && newsCtx.value.length > 0
+      ? `\n\nLIVE NEWS HEADLINES (last few hours):\n${(Array.isArray(newsCtx.value[0]) ? newsCtx.value : newsCtx.value).map((h, i) => `${i + 1}. ${typeof h === "string" ? h : h.headline || h}`).join("\n")}`
+      : "";
+
+    const benchmarks = benchCtx.status === "fulfilled" && benchCtx.value
+      ? `\n\nMARKET BENCHMARKS:\n${benchCtx.value.sp500 ? `S&P 500: ${benchCtx.value.sp500.price} (1D: ${benchCtx.value.sp500.change1d}%, 1W: ${benchCtx.value.sp500.change1w}%, 1M: ${benchCtx.value.sp500.change1m}%)` : ""}${benchCtx.value.asx200 ? `\nASX 200: ${benchCtx.value.asx200.price} (1D: ${benchCtx.value.asx200.change1d}%, 1W: ${benchCtx.value.asx200.change1w}%, 1M: ${benchCtx.value.asx200.change1m}%)` : ""}`
+      : "";
+
+    const cryptoPrices = cryptoCtx.status === "fulfilled"
+      ? `\n\nCRYPTO PRICES: ${cryptoCtx.value}`
+      : "";
+
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
@@ -958,12 +1072,22 @@ app.get("/api/dashboard/picks", async (req, res) => {
         model: "claude-sonnet-4-20250514",
         max_tokens: 3000,
         system: `You are a senior investment analyst generating today's top picks. Today is ${today}.
-Generate 3 high-conviction investment picks — aim for variety across asset classes (e.g. US large-cap stock, ASX stock or ETF, crypto). Pick what is genuinely interesting given current market conditions as of today's date.
+${benchmarks}${cryptoPrices}${newsHeadlines}
+
+TASK: Generate 3 high-conviction investment picks grounded in the LIVE DATA above. At least 2 must be BUY. Aim for variety across asset classes (e.g. US large-cap, ASX stock, crypto).
+
+CRITICAL RULES:
+- Every pick MUST cite a specific catalyst from the news, market data, or a verifiable recent event. No generic "looks undervalued" picks.
+- Reference actual prices and percentage moves from the data above. Your analysis must be anchored in TODAY's market conditions.
+- Be aggressive — this user wants actionable BUY opportunities, not cautious hedging.
+- ASX tickers must end in .AX. Use standard crypto symbols (BTC, ETH, SOL etc).
+- For priceStatic use your best estimate of the current price based on the data above.
+
+Horizon definitions: Short = up to 3 months; Medium = 3 months to 1 year; Long = 1 year or more.
+
 Respond ONLY with a valid JSON array, no markdown fences. Each pick must use this exact structure:
-[{"sym":"TICKER","name":"Full Company Name","sector":"Sector","verdict":"BUY|WATCH|AVOID|HOLD","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","priceStatic":0.00,"target":"$X","upside":"+X%","up":true,"priceType":"stock or crypto","priceCurrency":"USD or AUD","avgCurrency":"USD or AUD","summary":"2-3 sentences on the core thesis.","macro":"2-3 sentences on macro tailwinds or headwinds.","fundamental":"2-3 sentences on key fundamental metrics.","technical":"2-3 sentences on technical setup.","sentiment":"2-3 sentences on analyst and market sentiment.","insider":"2-3 sentences on insider activity or institutional flows.","portfolio":"1-2 sentences on portfolio fit and sizing."}]
-Rules: ASX tickers must end in .AX. Use standard crypto symbols (BTC, ETH, SOL etc). For priceStatic use your best estimate of the current price. Be direct and specific — avoid generic statements.
-Horizon definitions: Short = up to 3 months; Medium = 3 months to 1 year; Long = 1 year or more.`,
-        messages: [{ role: "user", content: "Generate today's 3 top investment picks with full analysis." }],
+[{"sym":"TICKER","name":"Full Company Name","sector":"Sector","verdict":"BUY|WATCH","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","priceStatic":0.00,"target":"$X","upside":"+X%","up":true,"priceType":"stock or crypto","priceCurrency":"USD or AUD","avgCurrency":"USD or AUD","summary":"2-3 sentences on the core thesis referencing specific catalyst.","macro":"2-3 sentences on macro tailwinds/headwinds with data.","fundamental":"2-3 sentences on key metrics.","technical":"2-3 sentences on technical setup with price levels.","sentiment":"2-3 sentences on current market sentiment.","insider":"2-3 sentences on institutional activity.","portfolio":"1-2 sentences on sizing."}]`,
+        messages: [{ role: "user", content: "Generate today's 3 top investment picks. Ground every pick in the live market data provided. Be specific and aggressive." }],
       }),
     });
     const d = await response.json();
@@ -973,14 +1097,15 @@ Horizon definitions: Short = up to 3 months; Medium = 3 months to 1 year; Long =
     if (start === -1 || end === -1) throw new Error("No JSON array found in response");
     const parsed = JSON.parse(text.slice(start, end + 1));
     if (!Array.isArray(parsed) || parsed.length === 0) throw new Error("Invalid response format");
-    // Fetch live prices and replace Claude's priceStatic estimates
+    // Fetch live prices and replace Claude's priceStatic estimates (null on failure — never keep Claude's guess)
     await Promise.allSettled(parsed.map(async pick => {
       try {
         const result = pick.priceType === "crypto"
           ? await fetchCryptoPrice(pick.sym)
           : await fetchStockPrice(pick.sym);
         if (result?.price) { pick.priceStatic = result.price; pick.priceCurrency = result.currency || pick.priceCurrency; }
-      } catch {}
+        else { pick.priceStatic = null; }
+      } catch { pick.priceStatic = null; }
     }));
     dashCache = { picks: parsed, ts: now };
     console.log(`Dashboard: generated ${parsed.length} picks`);
@@ -1034,7 +1159,7 @@ app.post("/api/journal/analyse", async (req, res) => {
       method: "POST",
       headers: { "Content-Type":"application/json", "x-api-key":ANTHROPIC_API_KEY, "anthropic-version":"2023-06-01" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514", max_tokens: 1500,
+        model: "claude-haiku-4-5-20251001", max_tokens: 1500,
         system: `You are a trading coach specialising in behavioural finance. Today is ${today}. Analyse this trade journal for patterns and provide honest, direct coaching. Focus on behavioural patterns not just performance. Return ONLY valid JSON:
 {"summary":"2-3 sentences overall assessment","patterns":[{"pattern":"Name of behavioural pattern","description":"1-2 sentences explaining the pattern with specific examples from the journal","severity":"HIGH|MEDIUM|LOW","advice":"Specific actionable advice to address this"}],"strengths":["short string"],"weaknesses":["short string"],"winRate":"X% (N/N trades)" or null,"avgHoldDays":number or null,"topMistake":"1 sentence on the single biggest mistake","keyAdvice":"The most important piece of advice in 1-2 sentences"}`,
         messages: [{ role:"user", content: `Analyse my trade journal (${entries.length} entries):\n\n${lines.join("\n")}` }],
@@ -1070,7 +1195,7 @@ app.post("/api/macro", async (req, res) => {
       method: "POST",
       headers: { "Content-Type":"application/json", "x-api-key":ANTHROPIC_API_KEY, "anthropic-version":"2023-06-01" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514", max_tokens: 2500,
+        model: "claude-haiku-4-5-20251001", max_tokens: 2500,
         system: `You are a macro economist. Today is ${today}. Generate the upcoming macro events for the next 6 weeks that matter to investors. Include central bank meetings, major economic data releases (CPI, jobs, GDP, PMI), and any known scheduled events. For each event, assess the portfolio impact for these holdings: ${holdings}. Return ONLY valid JSON array (no markdown):
 [{"date":"YYYY-MM-DD","event":"Event name","category":"FED|RBA|ECB|INFLATION|EMPLOYMENT|GROWTH|TRADE|OTHER","country":"US|AU|EU|CN|GLOBAL","importance":"HIGH|MEDIUM|LOW","preview":"1 sentence on what to expect","portfolioImpact":"1-2 sentences on how this affects the specific holdings listed — be specific about which holdings are most affected","bullCase":"If outcome beats expectations: 1 sentence","bearCase":"If outcome misses: 1 sentence","affectedHoldings":["SYM1","SYM2"]}]
 Return 8–14 events. Sort by date ascending. Only include events you are confident will occur around this time — do not invent speculative events.`,
@@ -1120,6 +1245,16 @@ Horizon definitions: Short = up to 3 months; Medium = 3 months to 1 year; Long =
     if (start === -1 || end === -1) throw new Error("No JSON array in response");
     const parsed = JSON.parse(text.slice(start, end + 1));
     if (!Array.isArray(parsed)) throw new Error("Invalid response");
+    // Fetch live prices and replace Claude's estimates (same as dashboard picks)
+    await Promise.allSettled(parsed.map(async pick => {
+      try {
+        const result = pick.priceType === "crypto"
+          ? await fetchCryptoPrice(pick.sym)
+          : await fetchStockPrice(pick.sym);
+        if (result?.price) { pick.priceStatic = result.price; pick.priceCurrency = result.currency || pick.priceCurrency; }
+        else { pick.priceStatic = null; }
+      } catch { pick.priceStatic = null; }
+    }));
     res.json(parsed);
   } catch (err) {
     console.error("Screener error:", err.message);
