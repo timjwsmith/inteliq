@@ -1254,7 +1254,7 @@ function ReasoningChain({ stock }) {
 function StockCard({ stock, expanded, onToggle, livePrices, displayCcy, audUsd, onAddWatchlist, inWatchlist, onViewChart, onTrade }) {
   const accent = {BUY:"var(--green)",WATCH:"var(--amber)",AVOID:"var(--red)",HOLD:"var(--border2)"}[stock.verdict]||"var(--border2)";
   const ld = livePrices?.[stock.sym];
-  const priceCcy = stock.priceCurrency || ld?.currency || "USD";
+  const priceCcy = ld?.currency || stock.priceCurrency || "USD";
   const rawPrice = ld?.price || stock.priceStatic;
   const dispPrice = toDisplay(rawPrice, priceCcy, displayCcy, audUsd);
 
@@ -2226,20 +2226,24 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
 // ── Glossary modal ─────────────────────────────────────────────────────────
 function GlossaryModal({ open, onClose, focusTerm, allGlossary }) {
   const termRefs = useRef({});
+  const [glossarySearch, setGlossarySearch] = useState("");
   useEffect(() => {
     if (open && focusTerm && termRefs.current[focusTerm]) {
       setTimeout(() => termRefs.current[focusTerm].scrollIntoView({ behavior:"smooth", block:"center" }), 120);
     }
+    if (!open) setGlossarySearch("");
   }, [open, focusTerm]);
   if (!open) return null;
   const gl = allGlossary || GLOSSARY;
   const sorted = [...gl].sort((a, b) => a.term.localeCompare(b.term));
   const builtInTerms = new Set(GLOSSARY.map(g => g.term));
   const customCount = gl.filter(g => !builtInTerms.has(g.term)).length;
+  const q = glossarySearch.toLowerCase().trim();
+  const filtered = q ? sorted.filter(g => g.term.toLowerCase().includes(q) || (g.def || g.definition || "").toLowerCase().includes(q)) : sorted;
   return (
     <div onClick={onClose} style={{ position:"fixed", inset:0, background:"#00000090", zIndex:1000, display:"flex", alignItems:"flex-start", justifyContent:"center", padding:"5vh 20px", overflowY:"auto" }}>
       <div onClick={e => e.stopPropagation()} style={{ background:"var(--surface)", border:"1px solid var(--border2)", borderRadius:16, padding:"28px 32px", maxWidth:660, width:"100%", marginBottom:40 }}>
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:24 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:16 }}>
           <div>
             <h2 style={{ fontFamily:"var(--ff-head)", fontSize:22, fontWeight:800, color:"var(--text2)", letterSpacing:"-0.02em" }}>Glossary</h2>
             <p style={{ fontSize:11, color:"var(--muted)", fontFamily:"var(--ff-mono)", letterSpacing:"0.06em", marginTop:4 }}>
@@ -2248,8 +2252,10 @@ function GlossaryModal({ open, onClose, focusTerm, allGlossary }) {
           </div>
           <button onClick={onClose} style={{ background:"none", border:"1px solid var(--border)", borderRadius:8, padding:"7px 16px", color:"var(--muted2)", fontSize:11, fontFamily:"var(--ff-mono)", letterSpacing:"0.06em", flexShrink:0 }}>CLOSE ✕</button>
         </div>
-        <div style={{ maxHeight:"65vh", overflowY:"auto", paddingRight:4 }}>
-          {sorted.map(g => {
+        <input value={glossarySearch} onChange={e => setGlossarySearch(e.target.value)} placeholder="Search terms…" autoFocus={!focusTerm} style={{ width:"100%", background:"var(--card)", border:"1px solid var(--border)", borderRadius:10, padding:"10px 16px", color:"var(--text2)", fontSize:13, fontFamily:"var(--ff-body)", marginBottom:16, boxSizing:"border-box" }}/>
+        <div style={{ maxHeight:"60vh", overflowY:"auto", paddingRight:4 }}>
+          {filtered.length === 0 && <p style={{ fontSize:13, color:"var(--muted)", textAlign:"center", padding:"20px 0" }}>No terms matching "{glossarySearch}"</p>}
+          {filtered.map(g => {
             const isCustom = !builtInTerms.has(g.term);
             return (
               <div key={g.term} ref={el => { termRefs.current[g.term] = el; }}
@@ -2282,10 +2288,12 @@ export default function App() {
   const [dashPicks,setDashPicks]     = useState([]);
   const [dashLoading,setDashLoading] = useState(false);
   const [dashError,setDashError]     = useState(null);
+  const [dashStatus,setDashStatus]   = useState(null);
 
   // Explorer
   const [searchQ,setSearchQ]       = useState("");
   const [searching,setSearching]   = useState(false);
+  const [searchStatus,setSearchStatus] = useState(null);
   const [searchResult,setResult]   = useState(null);
   const [searchError,setSearchErr] = useState(null);
   const [searchHistory,setHistory] = useState(() => {
@@ -2453,12 +2461,46 @@ export default function App() {
       ...cbHoldings, ...bnHoldings, ...ldgHoldings, ...cmcHoldings,
       ...dashPicks.map(s => ({ sym:s.sym, priceType:s.priceType })),
       ...watchlist.map(w => ({ sym:w.sym, priceType:w.priceType })),
+      ...callRecords.map(c => ({ sym:c.sym, priceType:c.priceType || "stock" })),
     ];
     const unique = all.filter((s,i,a) => a.findIndex(x=>x.sym===s.sym)===i).map(h=>({sym:h.sym,type:h.priceType}));
     if (!unique.length) return;
     fetch("/api/prices", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({symbols:unique}) })
       .then(r=>r.json()).then(d=>setLP(p=>({...p,...d}))).catch(()=>{});
   }, [cbHoldings,bnHoldings,ldgHoldings,cmcHoldings,dashPicks,watchlist]);
+
+  // Patch call records: fix null/zero prices, currency mismatches, or Claude's bad estimates for recent calls
+  useEffect(() => {
+    if (!Object.keys(livePrices).length || !callRecords.length) return;
+    let patched = false;
+    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+    const updated = callRecords.map(c => {
+      if (c.pricePatched) return c;
+      const lp = livePrices[c.sym];
+      if (!lp?.price) return c;
+      // Fix null/zero prices
+      if (c.priceAtCall == null || c.priceAtCall <= 0) {
+        patched = true;
+        return { ...c, priceAtCall: lp.price, priceCurrency: lp.currency || c.priceCurrency, pricePatched: true };
+      }
+      // Fix currency mismatch
+      if (lp.currency && c.priceCurrency && lp.currency !== c.priceCurrency) {
+        patched = true;
+        return { ...c, priceAtCall: lp.price, priceCurrency: lp.currency, pricePatched: true };
+      }
+      // Fix Claude's bad price estimates for recent calls (<7 days old, >50% off)
+      const ageMs = Date.now() - new Date(c.calledAt).getTime();
+      if (ageMs < sevenDaysMs) {
+        const ratio = lp.price / c.priceAtCall;
+        if (ratio > 1.5 || ratio < 0.67) {
+          patched = true;
+          return { ...c, priceAtCall: lp.price, priceCurrency: lp.currency || c.priceCurrency, pricePatched: true };
+        }
+      }
+      return c;
+    });
+    if (patched) setCallRecords(updated);
+  }, [livePrices]);
 
   // Persist ledger addresses
   useEffect(() => {
@@ -2516,19 +2558,39 @@ export default function App() {
 
   async function fetchDashPicks(force = false) {
     if (dashLoading) return;
-    setDashLoading(true); setDashError(null);
+    setDashLoading(true); setDashError(null); setDashStatus(null);
     if (force) setDashPicks([]);
     try {
-      const url = force ? "/api/dashboard/picks?force=1" : "/api/dashboard/picks";
+      const url = force ? "/api/dashboard/picks/stream?force=1" : "/api/dashboard/picks/stream";
       const r = await fetch(url);
-      const d = await r.json();
-      if (Array.isArray(d) && d.length > 0) {
-        setDashPicks(d);
-        d.forEach(pick => recordCall({ ...pick, priceAtCall: pick.priceStatic }, "dashboard"));
-        const allText = d.map(p => [p.summary,p.macro,p.fundamental,p.technical,p.sentiment,p.portfolio].filter(Boolean).join(" ")).join(" ");
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let picks = null;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ") || line.includes("[DONE]")) continue;
+          try {
+            const evt = JSON.parse(line.slice(6));
+            if (evt.error) throw new Error(evt.error);
+            if (evt.status === "done" && evt.picks) { picks = evt.picks; }
+            else if (evt.status) { setDashStatus(evt.status); }
+          } catch (e) { if (e.message && !e.message.includes("JSON")) throw e; }
+        }
+      }
+      setDashStatus(null);
+      if (Array.isArray(picks) && picks.length > 0) {
+        setDashPicks(picks);
+        picks.filter(pick => ["BUY","WATCH"].includes(pick.verdict)).forEach(pick => recordCall({ ...pick, priceAtCall: pick.priceStatic }, "dashboard"));
+        const allText = picks.map(p => [p.summary,p.macro,p.fundamental,p.technical,p.sentiment,p.portfolio].filter(Boolean).join(" ")).join(" ");
         extractGlossaryTerms(allText);
-      } else setDashError(d.error || "No picks returned");
-    } catch { setDashError("Could not load picks — check your connection"); }
+      } else setDashError("No picks returned");
+    } catch (e) { setDashError(e.message || "Could not load picks — check your connection"); setDashStatus(null); }
     setDashLoading(false);
   }
 
@@ -2727,14 +2789,47 @@ export default function App() {
         }
         if (parts.length) fundamentalsCtx = `\n\nLIVE FUNDAMENTALS (FMP): ${parts.join(" | ")}\nUse this live data for your fundamental analysis.`;
       }
-      const res = await fetch("/api/analyse", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({
+      // Stream analysis for faster perceived response
+      const streamRes = await fetch("/api/analyse/stream", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({
         model:"claude-sonnet-4-20250514", max_tokens:1000,
         system:`You are a senior investment analyst. Today is ${today}. Your training knowledge has a cutoff of approximately mid-2025 — do NOT present specific metrics from your training data (e.g. ETF flow volumes, exact hash rates, specific institutional inflow figures, dated earnings numbers) as if they are current facts for ${today}. For fundamentals, focus on structural and qualitative factors. If you cite a specific metric that may have changed, frame it as approximate or add "as of mid-2025". All macro commentary must reflect conditions as of ${today} — do not reference past rate decisions or events as if they are upcoming. For crypto assets (BTC, ETH, SOL etc) analyse the native coin/token directly — do NOT substitute an ETF or trust product. Respond ONLY with valid JSON, no markdown:
 {"sym":"TICKER","name":"Full name","sector":"sector","verdict":"BUY|WATCH|AVOID|HOLD","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","priceStatic":123.45,"target":"$X","upside":"+X%","up":true,"priceType":"stock or crypto","avgCurrency":"USD or AUD","priceCurrency":"USD or AUD","summary":"2-3 sentences","macro":"2-3 sentences","fundamental":"2-3 sentences","technical":"2-3 sentences","sentiment":"2-3 sentences","insider":"2-3 sentences","portfolio":"2-3 sentences"}`,
         messages:[{role:"user",content:`Analyse this investment: ${q}.${livePriceCtx}${fundamentalsCtx}`}]
       })});
-      const data = await res.json();
-      const text = data.content?.find(b=>b.type==="text")?.text||"";
+      const reader = streamRes.body.getReader();
+      const decoder = new TextDecoder();
+      let fullText = "";
+      let streamBuf = "";
+      const statusStages = [
+        { at: 50, msg: "Reading fundamentals..." },
+        { at: 150, msg: "Checking macro conditions..." },
+        { at: 300, msg: "Analysing technicals..." },
+        { at: 450, msg: "Evaluating sentiment..." },
+        { at: 600, msg: "Forming verdict..." },
+      ];
+      let charCount = 0;
+      let stageIdx = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        streamBuf += decoder.decode(value, { stream: true });
+        const lines = streamBuf.split("\n");
+        streamBuf = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ") || line.includes("[DONE]")) continue;
+          try {
+            const evt = JSON.parse(line.slice(6));
+            if (evt.t) { fullText += evt.t; charCount += evt.t.length; }
+            if (evt.error) throw new Error(evt.error);
+          } catch (e) { if (e.message && !e.message.includes("JSON")) throw e; }
+        }
+        if (stageIdx < statusStages.length && charCount >= statusStages[stageIdx].at) {
+          setSearchStatus(statusStages[stageIdx].msg);
+          stageIdx++;
+        }
+      }
+      setSearchStatus(null);
+      const text = fullText;
       const parsed = JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}")+1));
       setResult(parsed);
       recordCall({ ...parsed, priceAtCall: livePrice || parsed.priceStatic }, "explorer");
@@ -2769,7 +2864,7 @@ export default function App() {
         ...prev.filter(h => h.sym !== parsed.sym)
       ].slice(0, 10));
       fetch(`/api/price?sym=${parsed.sym}&type=${parsed.priceType}`).then(r=>r.json()).then(d=>setLP(p=>({...p,[parsed.sym]:d}))).catch(()=>{});
-    } catch { setSearchErr("Analysis failed — please try again."); }
+    } catch { setSearchErr("Analysis failed — please try again."); setSearchStatus(null); }
     setSearching(false);
   }
 
@@ -2778,9 +2873,9 @@ export default function App() {
     setWatchlist(prev => [{
       sym: stock.sym, name: stock.name, sector: stock.sector,
       priceType: stock.priceType || "stock",
-      priceCurrency: stock.priceCurrency || "USD",
+      priceCurrency: livePrices[stock.sym]?.currency || stock.priceCurrency || "USD",
       target: parseTargetNum(stock.target),
-      targetCcy: stock.avgCurrency || "USD",
+      targetCcy: livePrices[stock.sym]?.currency || stock.avgCurrency || "USD",
       addedAt: new Date().toISOString(),
       note: stock.summary ? stock.summary.slice(0, 100) + (stock.summary.length > 100 ? "…" : "") : "",
     }, ...prev]);
@@ -2805,7 +2900,7 @@ export default function App() {
       const r = await fetch("/api/screener", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ query }) });
       const d = await r.json();
       if (d.error) setScreenerError(d.error);
-      else { setScreenerResults(d); d.forEach(pick => recordCall({...pick, priceAtCall: pick.priceStatic}, "screener")); }
+      else { setScreenerResults(d); d.filter(pick => ["BUY","WATCH"].includes(pick.verdict)).forEach(pick => recordCall({...pick, priceAtCall: pick.priceStatic}, "screener")); }
     } catch { setScreenerError("Screener failed — please try again."); }
     setScreenerLoading(false);
   }
@@ -2854,7 +2949,7 @@ export default function App() {
       const r = await fetch("/api/analyse", {
         method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({
-          model:"claude-sonnet-4-20250514", max_tokens:600,
+          model:"claude-haiku-4-5-20251001", max_tokens:600,
           system:`You are a senior analyst. Today is ${today}. Return ONLY valid JSON:
 {"watch":"Key metric/number to watch for","consensus":"What the market expects — be specific","risk":"Main earnings risk in 1 sentence","setup":"Technical/positioning setup going into earnings in 1 sentence","verdict":"BEAT_LIKELY|MISS_LIKELY|IN_LINE|UNCERTAIN"}`,
           messages:[{role:"user",content:`Pre-earnings brief for ${sym}. Upcoming date: ${upcomingDate||"next quarter"}. ${surpriseCtx} What should investors watch?`}],
@@ -2872,14 +2967,15 @@ export default function App() {
     setCallRecords(prev => {
       // Never overwrite an existing record — preserve the original call date and entry price
       if (prev.find(c => c.sym === parsed.sym)) return prev;
+      const lp = livePrices[parsed.sym];
       const record = {
         id: `${parsed.sym}-${Date.now()}`,
         sym: parsed.sym,           name: parsed.name || parsed.sym,
         verdict: parsed.verdict,   conviction: parsed.conviction || "MEDIUM",
         horizon: parsed.horizon || "Medium",
-        priceAtCall:   livePrices[parsed.sym]?.price || parsed.priceAtCall || parsed.priceStatic || null,
+        priceAtCall:   lp?.price || parsed.priceAtCall || parsed.priceStatic || null,
         priceType:     parsed.priceType    || "stock",
-        priceCurrency: parsed.priceCurrency|| "USD",
+        priceCurrency: lp?.currency || parsed.priceCurrency || "USD",
         calledAt: new Date().toISOString(),
         target: parsed.target || null,
         source,
@@ -2958,7 +3054,7 @@ export default function App() {
                     <h1 style={{ fontFamily:"var(--ff-head)", fontSize:28, fontWeight:800, letterSpacing:"-0.03em", color:"var(--text2)", lineHeight:1.2, marginBottom:6 }}>
                       {(()=>{const h=new Date().getHours();return h<12?"Good morning.":h<17?"Good afternoon.":"Good evening.";})()}<br/>
                       <span style={{ color:"var(--muted2)", fontWeight:600, fontSize:22 }}>
-                        {dashLoading ? "Generating picks…" : dashPicks.length > 0 ? `${dashPicks.length} high-conviction picks today.` : "Today's top picks."}
+                        {dashLoading ? (dashStatus || "Generating picks…") : dashPicks.length > 0 ? `${dashPicks.length} high-conviction picks today.` : "Today's top picks."}
                       </span>
                     </h1>
                     <p style={{ fontSize:11, color:"var(--muted)", fontFamily:"var(--ff-mono)", letterSpacing:"0.06em" }}>
@@ -2983,6 +3079,7 @@ export default function App() {
               {/* Loading shimmer */}
               {dashLoading && dashPicks.length === 0 && (
                 <div style={{display:"grid",gap:12,marginBottom:28}}>
+                  {dashStatus&&<div style={{fontSize:13,color:"var(--green)",fontFamily:"var(--ff-head)",fontWeight:600,marginBottom:4,display:"flex",alignItems:"center",gap:8}}><span style={{width:8,height:8,borderRadius:"50%",background:"var(--green)",display:"inline-block",animation:"pulse 1.5s infinite"}}></span>{dashStatus}</div>}
                   {[1,2,3].map(i=>(
                     <div key={i} className="card" style={{padding:20}}>
                       <div style={{display:"flex",gap:12,marginBottom:14,alignItems:"center"}}>
@@ -3035,12 +3132,15 @@ export default function App() {
               </div>
               <div className="fu2" style={{display:"flex",gap:8,marginBottom:20}}>
                 <input value={searchQ} onChange={e=>setSearchQ(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleSearch()} placeholder="e.g. NVIDIA, BHP, Bitcoin…" style={{flex:1,background:"var(--card)",border:"1px solid var(--border)",borderRadius:10,padding:"13px 18px",color:"var(--text2)",fontSize:14}}/>
-                <button onClick={()=>handleSearch()} disabled={searching} style={{background:searching?"var(--card)":"var(--green)",color:searching?"var(--muted)":"#0a0a14",border:"none",borderRadius:10,padding:"13px 28px",fontSize:13,fontFamily:"var(--ff-head)",fontWeight:700,opacity:searching?.7:1}}>
-                  {searching?"Analysing…":"Analyse →"}
+                <button onClick={()=>handleSearch()} disabled={searching} style={{background:searching?"var(--card)":"var(--green)",color:searching?"var(--muted)":"#0a0a14",border:"none",borderRadius:10,padding:"13px 28px",fontSize:13,fontFamily:"var(--ff-head)",fontWeight:700,opacity:searching?.7:1,cursor:searching?"default":"pointer"}}>
+                  {searching?(searchStatus||"Analysing…"):"Analyse →"}
                 </button>
               </div>
 
-              {searching&&<div style={{display:"grid",gap:10,marginBottom:20}}>{[85,65,75].map((w,i)=><div key={i} className="shimmer-el" style={{height:20,width:`${w}%`}}/>)}</div>}
+              {searching&&<div style={{display:"grid",gap:10,marginBottom:20}}>
+                {searchStatus&&<div style={{fontSize:13,color:"var(--green)",fontFamily:"var(--ff-head)",fontWeight:600,marginBottom:4,display:"flex",alignItems:"center",gap:8}}><span style={{width:8,height:8,borderRadius:"50%",background:"var(--green)",display:"inline-block",animation:"pulse 1.5s infinite"}}></span>{searchStatus}</div>}
+                {[85,65,75].map((w,i)=><div key={i} className="shimmer-el" style={{height:20,width:`${w}%`}}/>)}
+              </div>}
               {searchError&&<div style={{background:"#ff525212",border:"1px solid #ff525230",borderRadius:10,padding:16,color:"var(--red)",fontSize:13,marginBottom:20}}>{searchError}</div>}
 
               {searchResult&&!searching&&(
@@ -3487,7 +3587,7 @@ export default function App() {
                 <div style={{display:"grid",gap:8}}>
                   {watchlist.map(w => {
                     const lp = livePrices[w.sym];
-                    const priceCcy = w.priceCurrency || lp?.currency || "USD";
+                    const priceCcy = lp?.currency || w.priceCurrency || "USD";
                     const rawPrice = lp?.price;
                     const dispPrice = rawPrice ? toDisplay(rawPrice, priceCcy, displayCcy, audUsd) : null;
                     const targetDisp = w.target ? toDisplay(w.target, w.targetCcy || "USD", displayCcy, audUsd) : null;
@@ -3983,18 +4083,27 @@ export default function App() {
                 }).map(c => {
                   const cp = callsPrices[c.sym]?.price;
                   const ret = ((cp - c.priceAtCall) / c.priceAtCall) * 100;
-                  const win = (["BUY","HOLD"].includes(c.verdict) && ret > 0) || (["AVOID","SELL"].includes(c.verdict) && ret < 0);
-                  return { ...c, returnPct: ret, win };
+                  return { ...c, returnPct: ret };
                 });
 
+                // BUY stats (only BUY verdicts)
                 const buyCallsWithPrices = withPrices.filter(c => c.verdict === "BUY");
-                const buyWins = buyCallsWithPrices.filter(c => c.win).length;
+                const buyWins = buyCallsWithPrices.filter(c => c.returnPct > 0).length;
                 const buyWinRate = buyCallsWithPrices.length >= 3 ? (buyWins / buyCallsWithPrices.length * 100) : null;
                 const avgBuyReturn = buyCallsWithPrices.length > 0
                   ? buyCallsWithPrices.reduce((s, c) => s + c.returnPct, 0) / buyCallsWithPrices.length
                   : null;
-                const best  = withPrices.length > 0 ? withPrices.reduce((a, b) => a.returnPct > b.returnPct ? a : b) : null;
-                const worst = withPrices.length > 0 ? withPrices.reduce((a, b) => a.returnPct < b.returnPct ? a : b) : null;
+
+                // AVOID stats (correct = stock went down)
+                const avoidCalls = withPrices.filter(c => c.verdict === "AVOID" || c.verdict === "SELL");
+                const avoidCorrect = avoidCalls.filter(c => c.returnPct < 0).length;
+                const avoidRate = avoidCalls.length >= 3 ? (avoidCorrect / avoidCalls.length * 100) : null;
+                const avgAvoidReturn = avoidCalls.length > 0
+                  ? avoidCalls.reduce((s, c) => s + c.returnPct, 0) / avoidCalls.length
+                  : null;
+
+                const best  = buyCallsWithPrices.length > 0 ? buyCallsWithPrices.reduce((a, b) => a.returnPct > b.returnPct ? a : b) : null;
+                const worst = buyCallsWithPrices.length > 0 ? buyCallsWithPrices.reduce((a, b) => a.returnPct < b.returnPct ? a : b) : null;
 
                 const verdictCounts = { BUY:0, WATCH:0, AVOID:0, HOLD:0 };
                 callRecords.forEach(c => { if (verdictCounts[c.verdict] != null) verdictCounts[c.verdict]++; });
@@ -4004,13 +4113,13 @@ export default function App() {
                 return (
                   <>
                     {/* Stats strip */}
-                    <div className="fu2" style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:12,marginBottom:24}}>
+                    <div className="fu2" style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:12,marginBottom:12}}>
                       {[
                         { l:"TOTAL CALLS", v:`${callRecords.length}`, c:"var(--text2)", sub:null },
                         { l:"BUY WIN RATE", v: buyWinRate != null ? `${buyWinRate.toFixed(0)}%` : buyCallsWithPrices.length < 3 ? `need ${3 - buyCallsWithPrices.length} more` : "—", c: buyWinRate != null ? (buyWinRate >= 50 ? "var(--green)" : "var(--red)") : "var(--muted)", sub: buyCallsWithPrices.length > 0 ? `${buyWins}/${buyCallsWithPrices.length} BUYs` : null },
                         { l:"AVG BUY RETURN", v: avgBuyReturn != null ? `${avgBuyReturn >= 0 ? "+" : ""}${avgBuyReturn.toFixed(1)}%` : "—", c: avgBuyReturn != null ? (avgBuyReturn >= 0 ? "var(--green)" : "var(--red)") : "var(--muted)", sub:null },
-                        { l:"BEST CALL", v: best ? `${best.returnPct >= 0 ? "+" : ""}${best.returnPct.toFixed(1)}%` : "—", c:"var(--green)", sub: best ? best.sym : null },
-                        { l:"WORST CALL", v: worst ? `${worst.returnPct >= 0 ? "+" : ""}${worst.returnPct.toFixed(1)}%` : "—", c:"var(--red)", sub: worst ? worst.sym : null },
+                        { l:"BEST BUY", v: best ? `${best.returnPct >= 0 ? "+" : ""}${best.returnPct.toFixed(1)}%` : "—", c:"var(--green)", sub: best ? best.sym : null },
+                        { l:"WORST BUY", v: worst ? `${worst.returnPct >= 0 ? "+" : ""}${worst.returnPct.toFixed(1)}%` : "—", c:"var(--red)", sub: worst ? worst.sym : null },
                       ].map(m => (
                         <div key={m.l} className="stat-card">
                           <div style={{fontSize:9,fontFamily:"var(--ff-mono)",color:"var(--muted)",letterSpacing:"0.12em",marginBottom:10}}>{m.l}</div>
@@ -4019,6 +4128,21 @@ export default function App() {
                         </div>
                       ))}
                     </div>
+                    {avoidCalls.length > 0 && (
+                    <div className="fu2" style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:24}}>
+                      {[
+                        { l:"AVOID ACCURACY", v: avoidRate != null ? `${avoidRate.toFixed(0)}%` : avoidCalls.length < 3 ? `need ${3 - avoidCalls.length} more` : "—", c: avoidRate != null ? (avoidRate >= 50 ? "var(--green)" : "var(--red)") : "var(--muted)", sub: avoidCalls.length > 0 ? `${avoidCorrect}/${avoidCalls.length} correct` : null },
+                        { l:"AVG AVOIDED LOSS", v: avgAvoidReturn != null ? `${avgAvoidReturn >= 0 ? "+" : ""}${avgAvoidReturn.toFixed(1)}%` : "—", c: avgAvoidReturn != null ? (avgAvoidReturn < 0 ? "var(--green)" : "var(--red)") : "var(--muted)", sub: avgAvoidReturn != null && avgAvoidReturn < 0 ? "you dodged this" : null },
+                        { l:"AVOIDS TRACKED", v:`${avoidCalls.length}`, c:"var(--text2)", sub:null },
+                      ].map(m => (
+                        <div key={m.l} className="stat-card">
+                          <div style={{fontSize:9,fontFamily:"var(--ff-mono)",color:"var(--muted)",letterSpacing:"0.12em",marginBottom:10}}>{m.l}</div>
+                          <div style={{fontSize:20,fontFamily:"var(--ff-head)",fontWeight:800,color:m.c,lineHeight:1}}>{m.v}</div>
+                          {m.sub && <div style={{fontSize:10,color:"var(--muted2)",marginTop:5,fontFamily:"var(--ff-mono)"}}>{m.sub}</div>}
+                        </div>
+                      ))}
+                    </div>
+                    )}
 
                     {/* Filter pills */}
                     <div className="fu3" style={{display:"flex",gap:6,marginBottom:20,flexWrap:"wrap"}}>
