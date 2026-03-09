@@ -153,6 +153,7 @@ const PORT_TABS = [
   { id:"all",      label:"All",        color:"var(--text2)" },
   { id:"coinbase", label:"Coinbase",   color:"var(--amber)" },
   { id:"binance",  label:"Binance",    color:"#F0B90B" },
+  { id:"tiger",    label:"Tiger",      color:"#FF6600" },
   { id:"ledger",   label:"Ledger",     color:"#41a5f5"      },
   { id:"cmc",      label:"CMC Invest", color:"var(--blue)"  },
 ];
@@ -217,6 +218,12 @@ function fmtMoney(v, ccy) {
   if (Math.abs(v) >= 1_000)     return `${s}${v.toLocaleString("en", { maximumFractionDigits: 0 })}`;
   if (Math.abs(v) >= 1)         return `${s}${v.toFixed(2)}`;
   return `${s}${v.toFixed(4)}`;
+}
+
+function fmtDate(iso) {
+  if (!iso) return "—";
+  try { const d = new Date(typeof iso === "string" && iso.length === 10 ? iso + "T00:00:00" : iso); const dd = String(d.getDate()).padStart(2,"0"); const mm = String(d.getMonth()+1).padStart(2,"0"); return `${dd}-${mm}-${d.getFullYear()}`; }
+  catch { return String(iso); }
 }
 
 function calcPnl(holding, livePriceData, audUsd) {
@@ -884,11 +891,7 @@ function DividendPanel({ holdings, livePrices, audUsd, displayCcy }) {
 
   if (!stockSymKey) return null;
 
-  const fmtDate = iso => {
-    if (!iso) return "—";
-    try { return new Date(iso + "T00:00:00").toLocaleDateString("en-AU", { day:"numeric", month:"short", year:"2-digit" }); }
-    catch { return iso; }
-  };
+  // uses global fmtDate helper
 
   // Build rows: one per dividend-paying stock, normalised to USD
   let totalIncomeUSD = 0;
@@ -1027,6 +1030,7 @@ function HoldingRow({ holding, livePrice, expanded, onToggle, onRemove, onViewCh
           <div style={{ textAlign:"right", minWidth:70 }}>
             <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:4 }}>P&L</div>
             <div style={{ fontFamily:"var(--ff-mono)", fontSize:15, fontWeight:600, color:pnl.up?"var(--green)":"var(--red)" }}>{pnl.pct}</div>
+            {pnl.valid && holding.avg > 0 && dispPrice != null && dispAvg != null && (() => { const pnlDollar = holding.qty * (dispPrice - dispAvg); return <div style={{ fontSize:10, color:pnlDollar>=0?"var(--green)":"var(--red)", marginTop:2, fontFamily:"var(--ff-mono)" }}>{pnlDollar>=0?"+":"−"}{fmtMoney(Math.abs(pnlDollar), displayCcy)}</div>; })()}
             {livePrice && <div style={{ fontSize:10, color:livePrice.up?"var(--green)":"var(--red)", marginTop:2, fontFamily:"var(--ff-mono)" }}>{livePrice.changeStr} today</div>}
           </div>
         </div>
@@ -1054,12 +1058,12 @@ function HoldingRow({ holding, livePrice, expanded, onToggle, onRemove, onViewCh
                 CHART
               </button>
             )}
-            {holding.source === "coinbase" && onTrade && (
+            {(holding.source === "coinbase" || holding.source === "binance" || holding.source === "tiger") && onTrade && (
               <>
-                <button onClick={e=>{e.stopPropagation();onTrade({sym:holding.sym,name:holding.name,productId:`${holding.sym}-USD`,side:"BUY",priceType:"crypto"});}} style={{ background:"#00e67610", border:"1px solid #00e67640", borderRadius:8, padding:"7px 14px", color:"var(--green)", fontSize:11, fontFamily:"var(--ff-mono)", letterSpacing:"0.06em" }}>
+                <button onClick={e=>{e.stopPropagation();onTrade(holding.source==="tiger"?{sym:holding.sym,name:holding.name,side:"BUY",priceType:"stock",exchange:"tiger"}:{sym:holding.sym,name:holding.name,productId:`${holding.sym}-USD`,side:"BUY",priceType:"crypto",exchange:holding.source});}} style={{ background:"#00e67610", border:"1px solid #00e67640", borderRadius:8, padding:"7px 14px", color:"var(--green)", fontSize:11, fontFamily:"var(--ff-mono)", letterSpacing:"0.06em" }}>
                   BUY
                 </button>
-                <button onClick={e=>{e.stopPropagation();onTrade({sym:holding.sym,name:holding.name,productId:`${holding.sym}-USD`,side:"SELL",priceType:"crypto"});}} style={{ background:"#ff525218", border:"1px solid #ff525240", borderRadius:8, padding:"7px 14px", color:"var(--red)", fontSize:11, fontFamily:"var(--ff-mono)", letterSpacing:"0.06em" }}>
+                <button onClick={e=>{e.stopPropagation();onTrade(holding.source==="tiger"?{sym:holding.sym,name:holding.name,side:"SELL",priceType:"stock",exchange:"tiger"}:{sym:holding.sym,name:holding.name,productId:`${holding.sym}-USD`,side:"SELL",priceType:"crypto",exchange:holding.source});}} style={{ background:"#ff525218", border:"1px solid #ff525240", borderRadius:8, padding:"7px 14px", color:"var(--red)", fontSize:11, fontFamily:"var(--ff-mono)", letterSpacing:"0.06em" }}>
                   SELL
                 </button>
               </>
@@ -1124,7 +1128,7 @@ function SourcePanel({ label, color, holdings, livePrices, syncing, lastSync, er
         </div>
       ) : !error && (
         <div style={{ background:"var(--card)", border:"1px solid var(--border)", borderRadius:12, padding:"32px", textAlign:"center" }}>
-          <p style={{ color:"var(--muted2)", fontSize:13 }}>{syncing ? "Connecting…" : "No holdings found. Check your API keys in .env"}</p>
+          <p style={{ color:"var(--muted2)", fontSize:13 }}>{syncing ? "Connecting…" : lastSync ? "No open positions" : "No holdings found. Check your API keys in .env"}</p>
         </div>
       )}
     </div>
@@ -1248,10 +1252,10 @@ function ReasoningChain({ stock }) {
 }
 
 // ── Stock card ─────────────────────────────────────────────────────────────
-function StockCard({ stock, expanded, onToggle, livePrices, displayCcy, audUsd, onAddWatchlist, inWatchlist, onViewChart }) {
+function StockCard({ stock, expanded, onToggle, livePrices, displayCcy, audUsd, onAddWatchlist, inWatchlist, onViewChart, onTrade }) {
   const accent = {BUY:"var(--green)",WATCH:"var(--amber)",AVOID:"var(--red)",HOLD:"var(--border2)"}[stock.verdict]||"var(--border2)";
   const ld = livePrices?.[stock.sym];
-  const priceCcy = stock.priceCurrency || ld?.currency || "USD";
+  const priceCcy = ld?.currency || stock.priceCurrency || "USD";
   const rawPrice = ld?.price || stock.priceStatic;
   const dispPrice = toDisplay(rawPrice, priceCcy, displayCcy, audUsd);
 
@@ -1275,7 +1279,7 @@ function StockCard({ stock, expanded, onToggle, livePrices, displayCcy, audUsd, 
           {ld && !ld.error
             ? <div style={{fontFamily:"var(--ff-mono)",fontSize:12,color:ld.up?"var(--green)":"var(--red)"}}>{ld.changeStr}</div>
             : <div style={{fontFamily:"var(--ff-mono)",fontSize:12,color:stock.up?"var(--green)":"var(--red)"}}>{stock.upside}</div>}
-          <div style={{fontSize:10,color:"var(--muted)",marginTop:4,fontFamily:"var(--ff-mono)"}}>tgt {stock.target}</div>
+          <div style={{fontSize:10,color:"var(--muted)",marginTop:4,fontFamily:"var(--ff-mono)"}}>tgt {(() => { const tn = parseTargetNum(stock.target); if (tn == null) return stock.target; return fmtMoney(toDisplay(tn, priceCcy, displayCcy, audUsd), displayCcy); })()}</div>
         </div>
       </div>
       <p style={{fontSize:13,color:"var(--muted2)",lineHeight:1.7,marginTop:14}}><LinkedText>{stock.summary}</LinkedText></p>
@@ -1293,6 +1297,11 @@ function StockCard({ stock, expanded, onToggle, livePrices, displayCcy, audUsd, 
         {onViewChart && (
           <button onClick={onViewChart} style={{background:"none",border:"1px solid var(--border)",borderRadius:7,padding:"5px 14px",fontSize:10,color:"var(--muted2)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em"}}>
             CHART →
+          </button>
+        )}
+        {onTrade && (
+          <button onClick={onTrade} style={{background:"#00e67610",border:"1px solid #00e67640",borderRadius:7,padding:"5px 14px",fontSize:10,color:"var(--green)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",fontWeight:700}}>
+            ↔ TRADE
           </button>
         )}
       </div>
@@ -1360,7 +1369,7 @@ function IpoCard({ ipo, onAnalyse }) {
     if (diffDays === -1) return "Yesterday";
     if (diffDays > 0 && diffDays <= 30) return `in ${diffDays} days`;
     if (diffDays < 0 && diffDays >= -30) return `${Math.abs(diffDays)} days ago`;
-    return d.toLocaleDateString("en-AU", { day:"numeric", month:"short", year:"numeric" });
+    return fmtDate(dateStr);
   }
 
   const shares = ipo.numberOfShares ? (ipo.numberOfShares / 1e6).toFixed(1) + "M shares" : null;
@@ -1461,7 +1470,7 @@ function CallCard({ record, currentPriceData, onAnalyse, onRemove, priceFetching
             <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:3 }}>CALLED</div>
             <div style={{ fontFamily:"var(--ff-mono)", fontSize:14, fontWeight:500, color:"var(--text2)" }}>{ageSince(record.calledAt)}</div>
             <div style={{ fontFamily:"var(--ff-mono)", fontSize:10, color:"var(--muted)", marginTop:2 }}>
-              {new Date(record.calledAt).toLocaleDateString("en-AU", { day:"numeric", month:"short", year:"numeric" })}
+              {fmtDate(record.calledAt)}
             </div>
           </div>
           <div style={{ textAlign:"right" }}>
@@ -1501,7 +1510,7 @@ function CallCard({ record, currentPriceData, onAnalyse, onRemove, priceFetching
 }
 
 // ── Chart canvas ───────────────────────────────────────────────────────────
-function ChartCanvas({ candles, analysis, range, currency, indicators }) {
+function ChartCanvas({ candles, analysis, range, currency, indicators, displayCcy, audUsd }) {
   const canvasRef   = useRef(null);
   const containerRef = useRef(null);
   const [canvasW, setCanvasW] = useState(0);
@@ -1516,17 +1525,25 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
     return () => obs.disconnect();
   }, []);
 
-  useEffect(() => { draw(hovIdx); }, [candles, analysis, canvasW, hovIdx, indicators]);
+  useEffect(() => { draw(hovIdx); }, [candles, analysis, canvasW, hovIdx, indicators, displayCcy, audUsd]);
+
+  function convert(p) {
+    if (p == null || !displayCcy || !audUsd) return p;
+    return toDisplay(p, currency || "USD", displayCcy, audUsd);
+  }
+
+  const ccyPrefix = displayCcy === "AUD" ? "A$" : displayCcy === "USD" ? "$" : "";
 
   function fmt(p) {
     if (!p && p !== 0) return "—";
-    if (p >= 100000) return `${(p/1000).toFixed(0)}k`;
-    if (p >= 10000)  return `${(p/1000).toFixed(1)}k`;
-    if (p >= 1000)   return `${(p/1000).toFixed(2)}k`;
-    if (p >= 100)    return p.toFixed(0);
-    if (p >= 10)     return p.toFixed(1);
-    if (p >= 1)      return p.toFixed(2);
-    return p.toFixed(4);
+    const prefix = ccyPrefix;
+    if (p >= 100000) return `${prefix}${(p/1000).toFixed(0)}k`;
+    if (p >= 10000)  return `${prefix}${(p/1000).toFixed(1)}k`;
+    if (p >= 1000)   return `${prefix}${(p/1000).toFixed(2)}k`;
+    if (p >= 100)    return `${prefix}${p.toFixed(0)}`;
+    if (p >= 10)     return `${prefix}${p.toFixed(1)}`;
+    if (p >= 1)      return `${prefix}${p.toFixed(2)}`;
+    return `${prefix}${p.toFixed(4)}`;
   }
 
   function draw(hi) {
@@ -1554,15 +1571,18 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
     const rsiTop  = volTop + VOL_H + GAP2;
     const macdTop = rsiTop + RSI_H + GAP3;
 
+    // currency-converted candles (OHLC only; volume stays raw)
+    const cc = candles.map(c => ({ ...c, o: convert(c.o), h: convert(c.h), l: convert(c.l), c: convert(c.c) }));
+
     // data bounds
-    const hs = candles.map(c=>c.h).filter(Boolean);
-    const ls = candles.map(c=>c.l).filter(Boolean);
+    const hs = cc.map(c=>c.h).filter(Boolean);
+    const ls = cc.map(c=>c.l).filter(Boolean);
     if (!hs.length) return;
     const maxP = Math.max(...hs) * 1.003;
     const minP = Math.min(...ls) * 0.997;
     const pRange = maxP - minP;
     const maxVol = Math.max(...candles.map(c=>c.v||0));
-    const n = candles.length;
+    const n = cc.length;
     const toX = i => PL + (n > 1 ? (i / (n-1)) * chartW : chartW/2);
     const toY = p => PT + ((maxP - p) / pRange) * CHART_H;
     const cW  = Math.max(1.5, (chartW / n) * 0.65);
@@ -1606,8 +1626,8 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
         const upperPts = [], lowerPts = [];
         for (let i = 0; i < n; i++) {
           if (bb.upper[i] != null && bb.lower[i] != null) {
-            upperPts.push([toX(i), toY(bb.upper[i])]);
-            lowerPts.push([toX(i), toY(bb.lower[i])]);
+            upperPts.push([toX(i), toY(convert(bb.upper[i]))]);
+            lowerPts.push([toX(i), toY(convert(bb.lower[i]))]);
           }
         }
         if (upperPts.length >= 2) {
@@ -1632,7 +1652,7 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
           ctx.beginPath(); let _s = false;
           for (let i = 0; i < n; i++) {
             if (bb.middle[i] == null) { _s = false; continue; }
-            const x = toX(i), y = toY(bb.middle[i]);
+            const x = toX(i), y = toY(convert(bb.middle[i]));
             if (!_s) { ctx.moveTo(x, y); _s = true; } else ctx.lineTo(x, y);
           }
           ctx.strokeStyle = "#448aff30"; ctx.lineWidth = 1; ctx.stroke();
@@ -1645,7 +1665,7 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
         ctx.beginPath(); let _s = false;
         for (let i = 0; i < n; i++) {
           if (ema50[i] == null) { _s = false; continue; }
-          const x = toX(i), y = toY(ema50[i]);
+          const x = toX(i), y = toY(convert(ema50[i]));
           if (!_s) { ctx.moveTo(x, y); _s = true; } else ctx.lineTo(x, y);
         }
         ctx.strokeStyle = "#448aff99"; ctx.lineWidth = 1; ctx.stroke();
@@ -1656,7 +1676,7 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
         ctx.beginPath(); let _s = false;
         for (let i = 0; i < n; i++) {
           if (ema200[i] == null) { _s = false; continue; }
-          const x = toX(i), y = toY(ema200[i]);
+          const x = toX(i), y = toY(convert(ema200[i]));
           if (!_s) { ctx.moveTo(x, y); _s = true; } else ctx.lineTo(x, y);
         }
         ctx.strokeStyle = "#ffab4099"; ctx.lineWidth = 1; ctx.stroke();
@@ -1684,26 +1704,28 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
     // support lines
     ctx.setLineDash([5, 4]);
     (analysis?.support || []).forEach(s => {
-      if (!s.price || s.price < minP || s.price > maxP) return;
-      const y = toY(s.price);
+      const cp = convert(s.price);
+      if (!cp || cp < minP || cp > maxP) return;
+      const y = toY(cp);
       ctx.strokeStyle = s.strength === "STRONG" ? "#00e676aa" : "#00e67660";
       ctx.lineWidth = s.strength === "STRONG" ? 1.5 : 1;
       ctx.beginPath(); ctx.moveTo(PL, y); ctx.lineTo(W - PR, y); ctx.stroke();
       ctx.setLineDash([]);
       ctx.fillStyle = "#00e676bb"; ctx.font = "8px DM Mono,monospace"; ctx.textAlign = "right";
-      ctx.fillText(`S ${fmt(s.price)}`, W - PR - 3, y - 2);
+      ctx.fillText(`S ${fmt(cp)}`, W - PR - 3, y - 2);
       ctx.setLineDash([5, 4]);
     });
     // resistance lines
     (analysis?.resistance || []).forEach(r => {
-      if (!r.price || r.price < minP || r.price > maxP) return;
-      const y = toY(r.price);
+      const cp = convert(r.price);
+      if (!cp || cp < minP || cp > maxP) return;
+      const y = toY(cp);
       ctx.strokeStyle = r.strength === "STRONG" ? "#ff5252aa" : "#ff525260";
       ctx.lineWidth = r.strength === "STRONG" ? 1.5 : 1;
       ctx.beginPath(); ctx.moveTo(PL, y); ctx.lineTo(W - PR, y); ctx.stroke();
       ctx.setLineDash([]);
       ctx.fillStyle = "#ff5252bb"; ctx.font = "8px DM Mono,monospace"; ctx.textAlign = "right";
-      ctx.fillText(`R ${fmt(r.price)}`, W - PR - 3, y - 2);
+      ctx.fillText(`R ${fmt(cp)}`, W - PR - 3, y - 2);
       ctx.setLineDash([5, 4]);
     });
     ctx.setLineDash([]);
@@ -1711,7 +1733,7 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
     // volume bars
     for (let i = 0; i < n; i++) {
       const c = candles[i]; if (!c.v) continue;
-      const x = toX(i), up = c.c >= c.o;
+      const x = toX(i), up = cc[i].c >= cc[i].o;
       const vH = (c.v / maxVol) * VOL_H;
       ctx.fillStyle = hi === i ? (up ? "#00e676aa" : "#ff5252aa") : (up ? "#00e67630" : "#ff525230");
       ctx.fillRect(x - cW/2, volTop + VOL_H - vH, cW, vH);
@@ -1719,7 +1741,7 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
 
     // candles
     for (let i = 0; i < n; i++) {
-      const c = candles[i]; if (!c.o || !c.h || !c.l || !c.c) continue;
+      const c = cc[i]; if (!c.o || !c.h || !c.l || !c.c) continue;
       const x = toX(i), up = c.c >= c.o;
       const isHov = hi === i;
       const color = up ? (isHov ? "#33ffaa" : "#00e676") : (isHov ? "#ff7070" : "#ff5252");
@@ -1894,7 +1916,8 @@ function ChartCanvas({ candles, analysis, range, currency, indicators }) {
     setHovIdx(Math.max(0, Math.min(n - 1, idx)));
   }
 
-  const hov = hovIdx !== null ? candles[hovIdx] : null;
+  const hovRaw = hovIdx !== null ? candles[hovIdx] : null;
+  const hov = hovRaw ? { ...hovRaw, o: convert(hovRaw.o), h: convert(hovRaw.h), l: convert(hovRaw.l), c: convert(hovRaw.c) } : null;
 
   return (
     <div ref={containerRef} style={{width:"100%",position:"relative",borderRadius:10,overflow:"hidden"}}>
@@ -1924,37 +1947,51 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
   const { sym, name } = config;
   const [exchange, setExchange] = useState(config.exchange || null);
   const isBinance = exchange === "binance";
-  const tradeCcy = "USD";
-  const ccySymbol = "$";
+  const isTiger = exchange === "tiger";
+  const isAX = sym.endsWith(".AX") || sym.endsWith(".AU");
+  const tradeCcy = isTiger ? (isAX ? "AUD" : "USD") : "USD";
+  const ccySymbol = tradeCcy === "AUD" ? "A$" : "$";
+  const tigerMarket = isAX ? "ASX" : "US";
 
   const [side, setSide] = useState(config.side || "BUY");
   const [step, setStep] = useState(1);
   const [availBal, setAvailBal] = useState(null);
+  const [tigerBalCcy, setTigerBalCcy] = useState("USD");
   const [usdcBal, setUsdcBal] = useState(null);
   const [quoteAmount, setQuoteAmount] = useState("");
   const [cryptoQty, setCryptoQty] = useState("");
+  const [shareQty, setShareQty] = useState("");
+  const [tigerOrderType, setTigerOrderType] = useState("MKT");
+  const [limitPrice, setLimitPrice] = useState("");
   const [livePrice, setLivePrice] = useState(null);
   const [result, setResult] = useState(null);
   const [placing, setPlacing] = useState(false);
   const [bnTicker, setBnTicker] = useState(null);
 
-  // Fetch prices from both exchanges for comparison
+  // Fetch prices
   useEffect(() => {
-    fetch(`/api/binance/ticker/${sym}`)
-      .then(r => r.json())
-      .then(d => { if (d.price) setBnTicker(d); })
-      .catch(() => {});
+    if (!isTiger) {
+      fetch(`/api/binance/ticker/${sym}`)
+        .then(r => r.json())
+        .then(d => { if (d.price) setBnTicker(d); })
+        .catch(() => {});
+    }
     fetch(`/api/chart/${sym}?range=1d`)
       .then(r => r.json())
       .then(d => { if (d.currentPrice) setLivePrice(d.currentPrice); })
       .catch(() => {});
-  }, [sym]);
+  }, [sym, isTiger]);
 
   // Fetch balance when exchange changes
   useEffect(() => {
     if (!exchange) return;
     setAvailBal(null); setUsdcBal(null);
-    if (isBinance) {
+    if (isTiger) {
+      fetch(`/api/tiger/assets?currency=${tradeCcy}`)
+        .then(r => r.json())
+        .then(d => { setAvailBal(d.buyingPower ?? null); setTigerBalCcy(d.currency || tradeCcy); })
+        .catch(() => setAvailBal(null));
+    } else if (isBinance) {
       fetch("/api/binance/usdt-balance")
         .then(r => r.json())
         .then(d => { setAvailBal(d.available ?? null); })
@@ -1965,9 +2002,9 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
         .then(d => { setAvailBal(d.available ?? null); setUsdcBal(d.availableUSDC ?? null); })
         .catch(() => setAvailBal(null));
     }
-  }, [exchange, isBinance]);
+  }, [exchange, isBinance, isTiger, tradeCcy]);
 
-  // Auto-select cheaper exchange when none specified
+  // Auto-select cheaper exchange when none specified (crypto only)
   useEffect(() => {
     if (exchange) return;
     if (bnTicker && livePrice) {
@@ -1983,23 +2020,41 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
 
   // Determine which exchange is cheaper (for badge)
   const cheaper = (() => {
-    if (!bnTicker?.price || !livePrice) return null;
-    const bnEff = bnTicker.price * 1.001;  // 0.10% fee
-    const cbEff = livePrice * 1.006;       // 0.60% fee
+    if (isTiger || !bnTicker?.price || !livePrice) return null;
+    const bnEff = bnTicker.price * 1.001;
+    const cbEff = livePrice * 1.006;
     return side === "BUY" ? (bnEff <= cbEff ? "binance" : "coinbase") : (bnEff >= cbEff ? "binance" : "coinbase");
   })();
 
   const livePriceDisplay = isBinance && bnTicker?.price ? bnTicker.price : livePrice;
-  const estQty = side === "BUY" && livePriceDisplay && parseFloat(quoteAmount) > 0
+  const estQty = !isTiger && side === "BUY" && livePriceDisplay && parseFloat(quoteAmount) > 0
     ? (parseFloat(quoteAmount) / livePriceDisplay).toFixed(6) : null;
+  const tigerEstCost = isTiger && livePriceDisplay && parseInt(shareQty) > 0
+    ? (parseInt(shareQty) * livePriceDisplay) : null;
 
-  const canReview = exchange && (side === "BUY" ? !!parseFloat(quoteAmount) : !!parseFloat(cryptoQty));
+  const canReview = isTiger
+    ? parseInt(shareQty) > 0
+    : exchange && (side === "BUY" ? !!parseFloat(quoteAmount) : !!parseFloat(cryptoQty));
 
   async function placeOrder() {
     setPlacing(true);
     try {
       let r, data;
-      if (isBinance) {
+      if (isTiger) {
+        const body = { sym, side, qty: parseInt(shareQty), orderType: tigerOrderType, livePrice: livePriceDisplay };
+        if (tigerOrderType === "LMT" && parseFloat(limitPrice) > 0) body.limitPrice = parseFloat(limitPrice);
+        r = await fetch("/api/tiger/order", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        data = await r.json();
+        if (r.ok && data.success) {
+          setResult({ ok: true, orderId: String(data.orderId), productId: sym, status: data.status || "SUBMITTED" });
+        } else {
+          setResult({ ok: false, error: data.error || JSON.stringify(data) });
+        }
+      } else if (isBinance) {
         const body = { sym, side };
         if (side === "BUY") body.quoteAmount = parseFloat(quoteAmount);
         else body.qty = parseFloat(cryptoQty);
@@ -2020,7 +2075,7 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
           setResult({ ok: false, error: data.error || JSON.stringify(data) });
         }
       } else {
-        const body = { sym, side, tradeCcy, orderType: "market", audUsd };
+        const body = { sym, side, tradeCcy: "USD", orderType: "market", audUsd };
         if (side === "BUY") body.quoteSize = parseFloat(quoteAmount);
         else body.baseSize = parseFloat(cryptoQty);
         r = await fetch("/api/coinbase/order", {
@@ -2050,6 +2105,7 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
 
   const btnBase = { border:"none", borderRadius:8, padding:"9px 22px", fontSize:12, fontFamily:"var(--ff-mono)", letterSpacing:"0.06em", cursor:"pointer", fontWeight:700 };
   const inputStyle = { width:"100%", background:"var(--card)", border:"1px solid var(--border2)", borderRadius:8, padding:"10px 14px", color:"var(--text2)", fontFamily:"var(--ff-mono)", fontSize:15, boxSizing:"border-box" };
+  const exchangeLabel = isTiger ? "Tiger Brokers" : isBinance ? "Binance" : "Coinbase";
 
   return (
     <div onClick={onClose} style={{ position:"fixed", inset:0, background:"#00000090", zIndex:1000, display:"flex", alignItems:"center", justifyContent:"center", padding:"20px" }}>
@@ -2057,7 +2113,10 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:22 }}>
           <div>
             <h2 style={{ fontFamily:"var(--ff-head)", fontSize:20, fontWeight:800, color:"var(--text2)", margin:0 }}>Trade {sym}</h2>
-            <p style={{ fontSize:11, color:"var(--muted)", fontFamily:"var(--ff-mono)", margin:"4px 0 0", letterSpacing:"0.06em" }}>{name} · {exchange ? (isBinance ? "Binance" : "Coinbase") : "Select exchange"} · {sym}/{tradeCcy}</p>
+            <p style={{ fontSize:11, color:"var(--muted)", fontFamily:"var(--ff-mono)", margin:"4px 0 0", letterSpacing:"0.06em" }}>
+              {name} · {exchange ? exchangeLabel : "Select exchange"}
+              {isTiger && <span style={{ marginLeft:6, background:"#FF660018", border:"1px solid #FF660040", borderRadius:4, padding:"1px 6px", fontSize:9, color:"#FF6600" }}>{tigerMarket}</span>}
+            </p>
           </div>
           <button onClick={onClose} style={{ background:"none", border:"none", color:"var(--muted2)", fontSize:20, cursor:"pointer", lineHeight:1 }}>✕</button>
         </div>
@@ -2068,6 +2127,15 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
 
         {step === 1 && (
           <>
+            {isTiger ? (
+              <div style={{ marginBottom:18 }}>
+                <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>EXCHANGE</div>
+                <div style={{ background:"#FF660018", border:"1px solid #FF660060", borderRadius:10, padding:"10px 14px" }}>
+                  <div style={{ fontSize:11, fontWeight:700, color:"#FF6600", fontFamily:"var(--ff-head)" }}>Tiger Brokers</div>
+                  <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginTop:4 }}>{tigerMarket} MARKET · STOCKS</div>
+                </div>
+              </div>
+            ) : (
             <div style={{ marginBottom:18 }}>
               <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>EXCHANGE</div>
               <div style={{ display:"flex", gap:8 }}>
@@ -2095,6 +2163,7 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
                 })}
               </div>
             </div>
+            )}
             <div style={{ display:"flex", gap:8, marginBottom:18 }}>
               {["BUY","SELL"].map(s => (
                 <button key={s} onClick={() => setSide(s)} style={{ ...btnBase, flex:1,
@@ -2106,15 +2175,15 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
               ))}
             </div>
             <div style={{ marginBottom:18 }}>
-              <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>{isBinance ? "USDT" : "USD"} AVAILABLE</div>
+              <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>{isTiger ? "BUYING POWER" : isBinance ? "USDT" : "USD"} AVAILABLE</div>
               <div style={{ fontSize:16, fontFamily:"var(--ff-mono)", color:"var(--text2)", fontWeight:600 }}>
                 {!exchange ? "—" : availBal != null ? `${ccySymbol}${availBal.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}` : "Loading…"}
               </div>
-              {!isBinance && usdcBal != null && <div style={{ fontSize:10, fontFamily:"var(--ff-mono)", color:"var(--muted)", marginTop:4 }}>
+              {!isBinance && !isTiger && usdcBal != null && <div style={{ fontSize:10, fontFamily:"var(--ff-mono)", color:"var(--muted)", marginTop:4 }}>
                 USDC: ${usdcBal.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}
               </div>}
             </div>
-            {side === "BUY" && !isBinance && usdcBal != null && usdcBal <= 0 && availBal != null && availBal <= 0 && (
+            {side === "BUY" && !isBinance && !isTiger && usdcBal != null && usdcBal <= 0 && availBal != null && availBal <= 0 && (
               <div style={{ background:"#ffab4010", border:"1px solid #ffab4040", borderRadius:10, padding:"10px 14px", fontSize:11, color:"var(--amber)", marginBottom:18, lineHeight:1.5 }}>
                 No USDC or USD available. Coinbase Advanced Trade uses USDC/USD for buying. Buy some USDC in the Coinbase app first, then sync and retry.
               </div>
@@ -2124,18 +2193,49 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
                 No USDT available. Deposit or buy USDT on Binance to start trading.
               </div>
             )}
-            {side === "BUY" && (
-              <div style={{ marginBottom:18 }}>
-                <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>AMOUNT ({tradeCcy})</div>
-                <input value={quoteAmount} onChange={e => setQuoteAmount(e.target.value)} type="number" min="0" placeholder="e.g. 100" style={inputStyle}/>
-                {estQty && <div style={{ fontSize:10, color:"var(--muted)", fontFamily:"var(--ff-mono)", marginTop:6 }}>≈ {estQty} {sym}</div>}
-              </div>
-            )}
-            {side === "SELL" && (
-              <div style={{ marginBottom:18 }}>
-                <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>QUANTITY ({sym})</div>
-                <input value={cryptoQty} onChange={e => setCryptoQty(e.target.value)} type="number" min="0" placeholder="e.g. 0.005" style={inputStyle}/>
-              </div>
+            {isTiger ? (
+              <>
+                <div style={{ marginBottom:18 }}>
+                  <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>SHARES</div>
+                  <input value={shareQty} onChange={e => setShareQty(e.target.value.replace(/\D/g,""))} type="number" min="1" step="1" placeholder="e.g. 100" style={inputStyle}/>
+                  {tigerEstCost != null && <div style={{ fontSize:10, color:"var(--muted)", fontFamily:"var(--ff-mono)", marginTop:6 }}>Est. cost: {ccySymbol}{tigerEstCost.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})} {tradeCcy}</div>}
+                </div>
+                <div style={{ marginBottom:18 }}>
+                  <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>ORDER TYPE</div>
+                  <div style={{ display:"flex", gap:8 }}>
+                    {["MKT","LMT"].map(t => (
+                      <button key={t} onClick={() => setTigerOrderType(t)} style={{ ...btnBase, flex:1,
+                        background: t === tigerOrderType ? "#FF660018" : "var(--card)",
+                        color: t === tigerOrderType ? "#FF6600" : "var(--muted2)",
+                        border:`1px solid ${t === tigerOrderType ? "#FF660060" : "var(--border)"}` }}>
+                        {t === "MKT" ? "MARKET" : "LIMIT"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {tigerOrderType === "LMT" && (
+                  <div style={{ marginBottom:18 }}>
+                    <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>LIMIT PRICE ({tradeCcy})</div>
+                    <input value={limitPrice} onChange={e => setLimitPrice(e.target.value)} type="number" min="0" step="0.01" placeholder={livePriceDisplay ? livePriceDisplay.toFixed(2) : "0.00"} style={inputStyle}/>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                {side === "BUY" && (
+                  <div style={{ marginBottom:18 }}>
+                    <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>AMOUNT ({tradeCcy})</div>
+                    <input value={quoteAmount} onChange={e => setQuoteAmount(e.target.value)} type="number" min="0" placeholder="e.g. 100" style={inputStyle}/>
+                    {estQty && <div style={{ fontSize:10, color:"var(--muted)", fontFamily:"var(--ff-mono)", marginTop:6 }}>≈ {estQty} {sym}</div>}
+                  </div>
+                )}
+                {side === "SELL" && (
+                  <div style={{ marginBottom:18 }}>
+                    <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>QUANTITY ({sym})</div>
+                    <input value={cryptoQty} onChange={e => setCryptoQty(e.target.value)} type="number" min="0" placeholder="e.g. 0.005" style={inputStyle}/>
+                  </div>
+                )}
+              </>
             )}
             <button onClick={() => setStep(2)} disabled={!canReview}
               style={{ ...btnBase, width:"100%", background: side === "BUY" ? "var(--green)" : "var(--red)", color:"#0a0a14", opacity: canReview ? 1 : 0.4 }}>
@@ -2147,17 +2247,31 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
         {step === 2 && (
           <>
             <div style={{ background:"var(--card)", border:"1px solid var(--border)", borderRadius:12, padding:"18px 20px", marginBottom:20 }}>
-              {[
+              {(isTiger ? (() => {
+                const brokerage = isAX ? (tigerEstCost != null && tigerEstCost >= 20000 ? 6 : 3) : 2;
+                const total = tigerEstCost != null ? tigerEstCost + brokerage : null;
+                return [
+                { l:"EXCHANGE", v:"Tiger Brokers" },
+                { l:"SYMBOL", v:sym },
+                { l:"MARKET", v:tigerMarket },
+                { l:"SIDE", v:side },
+                { l:"SHARES", v:shareQty },
+                tigerEstCost != null && { l:"EST. COST", v:`${ccySymbol}${tigerEstCost.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}` },
+                { l:"TYPE", v:tigerOrderType === "MKT" ? "MARKET" : `LIMIT @ ${ccySymbol}${limitPrice}` },
+                { l:"BROKERAGE", v:`${ccySymbol}${brokerage.toFixed(2)}` },
+                total != null && { l:"TOTAL", v:`${ccySymbol}${total.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})} ${tradeCcy}`, bold:true },
+                ];
+              })() : [
                 { l:"EXCHANGE", v:isBinance ? "Binance" : "Coinbase" },
                 { l:"ASSET", v:sym },
                 { l:"SIDE", v:side },
                 side === "BUY" && { l:"SPEND", v:`${ccySymbol}${parseFloat(quoteAmount).toFixed(2)} ${tradeCcy}` },
                 side === "SELL" && { l:"SELL QTY", v:`${cryptoQty} ${sym}` },
                 { l:"TYPE", v:"MARKET" },
-              ].filter(Boolean).map(f => (
-                <div key={f.l} style={{ display:"flex", justifyContent:"space-between", marginBottom:12 }}>
-                  <span style={{ fontSize:10, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em" }}>{f.l}</span>
-                  <span style={{ fontSize:13, fontFamily:"var(--ff-mono)", color:"var(--text2)", fontWeight:600 }}>{f.v}</span>
+              ]).filter(Boolean).map(f => (
+                <div key={f.l} style={{ display:"flex", justifyContent:"space-between", marginBottom:12, ...(f.bold ? {borderTop:"1px solid var(--border)",paddingTop:12,marginTop:4} : {}) }}>
+                  <span style={{ fontSize:10, fontFamily:"var(--ff-mono)", color:f.bold?"var(--text2)":"var(--muted)", letterSpacing:"0.1em", fontWeight:f.bold?700:400 }}>{f.l}</span>
+                  <span style={{ fontSize:f.bold?15:13, fontFamily:"var(--ff-mono)", color:"var(--text2)", fontWeight:f.bold?800:600 }}>{f.v}</span>
                 </div>
               ))}
             </div>
@@ -2178,7 +2292,7 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
                 <>
                   <div style={{ fontSize:36, marginBottom:12 }}>✓</div>
                   <div style={{ fontFamily:"var(--ff-head)", fontSize:18, fontWeight:800, color:"var(--green)", marginBottom:8 }}>Order Placed</div>
-                  {result.productId && <div style={{ fontSize:12, fontFamily:"var(--ff-mono)", color:"var(--muted2)", marginBottom:6 }}>Pair: {result.productId}</div>}
+                  {result.productId && <div style={{ fontSize:12, fontFamily:"var(--ff-mono)", color:"var(--muted2)", marginBottom:6 }}>{isTiger ? "Symbol" : "Pair"}: {result.productId}</div>}
                   <div style={{ fontSize:11, fontFamily:"var(--ff-mono)", color:"var(--muted)", marginBottom:4 }}>Order ID: {result.orderId}</div>
                   {result.status && <div style={{ fontSize:10, fontFamily:"var(--ff-mono)", color:"var(--muted)" }}>Status: {result.status}</div>}
                 </>
@@ -2204,20 +2318,24 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
 // ── Glossary modal ─────────────────────────────────────────────────────────
 function GlossaryModal({ open, onClose, focusTerm, allGlossary }) {
   const termRefs = useRef({});
+  const [glossarySearch, setGlossarySearch] = useState("");
   useEffect(() => {
     if (open && focusTerm && termRefs.current[focusTerm]) {
       setTimeout(() => termRefs.current[focusTerm].scrollIntoView({ behavior:"smooth", block:"center" }), 120);
     }
+    if (!open) setGlossarySearch("");
   }, [open, focusTerm]);
   if (!open) return null;
   const gl = allGlossary || GLOSSARY;
   const sorted = [...gl].sort((a, b) => a.term.localeCompare(b.term));
   const builtInTerms = new Set(GLOSSARY.map(g => g.term));
   const customCount = gl.filter(g => !builtInTerms.has(g.term)).length;
+  const q = glossarySearch.toLowerCase().trim();
+  const filtered = q ? sorted.filter(g => g.term.toLowerCase().includes(q) || (g.def || g.definition || "").toLowerCase().includes(q)) : sorted;
   return (
     <div onClick={onClose} style={{ position:"fixed", inset:0, background:"#00000090", zIndex:1000, display:"flex", alignItems:"flex-start", justifyContent:"center", padding:"5vh 20px", overflowY:"auto" }}>
       <div onClick={e => e.stopPropagation()} style={{ background:"var(--surface)", border:"1px solid var(--border2)", borderRadius:16, padding:"28px 32px", maxWidth:660, width:"100%", marginBottom:40 }}>
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:24 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:16 }}>
           <div>
             <h2 style={{ fontFamily:"var(--ff-head)", fontSize:22, fontWeight:800, color:"var(--text2)", letterSpacing:"-0.02em" }}>Glossary</h2>
             <p style={{ fontSize:11, color:"var(--muted)", fontFamily:"var(--ff-mono)", letterSpacing:"0.06em", marginTop:4 }}>
@@ -2226,8 +2344,10 @@ function GlossaryModal({ open, onClose, focusTerm, allGlossary }) {
           </div>
           <button onClick={onClose} style={{ background:"none", border:"1px solid var(--border)", borderRadius:8, padding:"7px 16px", color:"var(--muted2)", fontSize:11, fontFamily:"var(--ff-mono)", letterSpacing:"0.06em", flexShrink:0 }}>CLOSE ✕</button>
         </div>
-        <div style={{ maxHeight:"65vh", overflowY:"auto", paddingRight:4 }}>
-          {sorted.map(g => {
+        <input value={glossarySearch} onChange={e => setGlossarySearch(e.target.value)} placeholder="Search terms…" autoFocus={!focusTerm} style={{ width:"100%", background:"var(--card)", border:"1px solid var(--border)", borderRadius:10, padding:"10px 16px", color:"var(--text2)", fontSize:13, fontFamily:"var(--ff-body)", marginBottom:16, boxSizing:"border-box" }}/>
+        <div style={{ maxHeight:"60vh", overflowY:"auto", paddingRight:4 }}>
+          {filtered.length === 0 && <p style={{ fontSize:13, color:"var(--muted)", textAlign:"center", padding:"20px 0" }}>No terms matching "{glossarySearch}"</p>}
+          {filtered.map(g => {
             const isCustom = !builtInTerms.has(g.term);
             return (
               <div key={g.term} ref={el => { termRefs.current[g.term] = el; }}
@@ -2260,10 +2380,12 @@ export default function App() {
   const [dashPicks,setDashPicks]     = useState([]);
   const [dashLoading,setDashLoading] = useState(false);
   const [dashError,setDashError]     = useState(null);
+  const [dashStatus,setDashStatus]   = useState(null);
 
   // Explorer
   const [searchQ,setSearchQ]       = useState("");
   const [searching,setSearching]   = useState(false);
+  const [searchStatus,setSearchStatus] = useState(null);
   const [searchResult,setResult]   = useState(null);
   const [searchError,setSearchErr] = useState(null);
   const [searchHistory,setHistory] = useState(() => {
@@ -2280,6 +2402,13 @@ export default function App() {
   const [bnSyncing,setBnS] = useState(false);
   const [bnLastSync,setBnL]= useState(null);
   const [bnError,setBnE]   = useState("");
+
+  const [tigerHoldings,setTiger] = useState([]);
+  const [tigerSyncing,setTigerS] = useState(false);
+  const [tigerLastSync,setTigerL]= useState(null);
+  const [tigerError,setTigerE]   = useState("");
+  const [tigerOrders,setTigerOrders] = useState([]);
+  const [tigerOrdersLoading,setTigerOL] = useState(false);
 
   const [ledgerAddrs, setLedgerAddrs] = useState(() => {
     try { return JSON.parse(localStorage.getItem("inteliq_ledger_addrs") || "[]"); } catch { return []; }
@@ -2428,9 +2557,10 @@ export default function App() {
   // Fetch live prices whenever holdings, watchlist, or dashboard picks change
   useEffect(() => {
     const all = [
-      ...cbHoldings, ...bnHoldings, ...cmcHoldings,
+      ...cbHoldings, ...bnHoldings, ...ldgHoldings, ...cmcHoldings,
       ...dashPicks.map(s => ({ sym:s.sym, priceType:s.priceType })),
       ...watchlist.map(w => ({ sym:w.sym, priceType:w.priceType })),
+      ...callRecords.map(c => ({ sym:c.sym, priceType:c.priceType || "stock" })),
     ];
     const unique = all.filter((s,i,a) => a.findIndex(x=>x.sym===s.sym)===i).map(h=>({sym:h.sym,type:h.priceType}));
     if (!unique.length) return;
@@ -2438,13 +2568,46 @@ export default function App() {
       .then(r=>r.json()).then(d=>setLP(p=>({...p,...d}))).catch(()=>{});
   }, [cbHoldings,bnHoldings,ldgHoldings,cmcHoldings,dashPicks,watchlist]);
 
+  // Patch call records: fix null/zero prices, currency mismatches, or Claude's bad estimates for recent calls
+  useEffect(() => {
+    if (!Object.keys(livePrices).length || !callRecords.length) return;
+    let patched = false;
+    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+    const updated = callRecords.map(c => {
+      if (c.pricePatched) return c;
+      const lp = livePrices[c.sym];
+      if (!lp?.price) return c;
+      // Fix null/zero prices
+      if (c.priceAtCall == null || c.priceAtCall <= 0) {
+        patched = true;
+        return { ...c, priceAtCall: lp.price, priceCurrency: lp.currency || c.priceCurrency, pricePatched: true };
+      }
+      // Fix currency mismatch
+      if (lp.currency && c.priceCurrency && lp.currency !== c.priceCurrency) {
+        patched = true;
+        return { ...c, priceAtCall: lp.price, priceCurrency: lp.currency, pricePatched: true };
+      }
+      // Fix Claude's bad price estimates for recent calls (<7 days old, >50% off)
+      const ageMs = Date.now() - new Date(c.calledAt).getTime();
+      if (ageMs < sevenDaysMs) {
+        const ratio = lp.price / c.priceAtCall;
+        if (ratio > 1.5 || ratio < 0.67) {
+          patched = true;
+          return { ...c, priceAtCall: lp.price, priceCurrency: lp.currency || c.priceCurrency, pricePatched: true };
+        }
+      }
+      return c;
+    });
+    if (patched) setCallRecords(updated);
+  }, [livePrices]);
+
   // Persist ledger addresses
   useEffect(() => {
     try { localStorage.setItem("inteliq_ledger_addrs", JSON.stringify(ledgerAddrs)); } catch {}
   }, [ledgerAddrs]);
 
   // Sync exchanges on mount
-  useEffect(() => { syncCoinbase(); syncBinance(); syncLedger(); }, []);
+  useEffect(() => { syncCoinbase(); syncBinance(); syncTiger(); syncTigerOrders(); syncLedger(); }, []);
 
   // Fetch dashboard picks on mount
   useEffect(() => { fetchDashPicks(); }, []);
@@ -2476,6 +2639,24 @@ export default function App() {
     setBnS(false);
   }
 
+  async function syncTiger() {
+    setTigerS(true); setTigerE("");
+    try {
+      const r = await fetch("/api/tiger/balances"); const d = await r.json();
+      if (d.error) setTigerE(d.error); else { setTiger(d.holdings||[]); setTigerL(nowTime()); }
+    } catch { setTigerE("Could not connect — check Tiger API config in .env"); }
+    setTigerS(false);
+  }
+
+  async function syncTigerOrders() {
+    setTigerOL(true);
+    try {
+      const r = await fetch("/api/tiger/orders"); const d = await r.json();
+      if (!d.error) setTigerOrders(d.orders || []);
+    } catch {}
+    setTigerOL(false);
+  }
+
   async function syncLedger() {
     if (!ledgerAddrs.length) return;
     setLdgS(true); setLdgE("");
@@ -2494,19 +2675,39 @@ export default function App() {
 
   async function fetchDashPicks(force = false) {
     if (dashLoading) return;
-    setDashLoading(true); setDashError(null);
+    setDashLoading(true); setDashError(null); setDashStatus(null);
     if (force) setDashPicks([]);
     try {
-      const url = force ? "/api/dashboard/picks?force=1" : "/api/dashboard/picks";
+      const url = force ? "/api/dashboard/picks/stream?force=1" : "/api/dashboard/picks/stream";
       const r = await fetch(url);
-      const d = await r.json();
-      if (Array.isArray(d) && d.length > 0) {
-        setDashPicks(d);
-        d.forEach(pick => recordCall({ ...pick, priceAtCall: pick.priceStatic }, "dashboard"));
-        const allText = d.map(p => [p.summary,p.macro,p.fundamental,p.technical,p.sentiment,p.portfolio].filter(Boolean).join(" ")).join(" ");
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let picks = null;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ") || line.includes("[DONE]")) continue;
+          try {
+            const evt = JSON.parse(line.slice(6));
+            if (evt.error) throw new Error(evt.error);
+            if (evt.status === "done" && evt.picks) { picks = evt.picks; }
+            else if (evt.status) { setDashStatus(evt.status); }
+          } catch (e) { if (e.message && !e.message.includes("JSON")) throw e; }
+        }
+      }
+      setDashStatus(null);
+      if (Array.isArray(picks) && picks.length > 0) {
+        setDashPicks(picks);
+        picks.filter(pick => ["BUY","WATCH"].includes(pick.verdict)).forEach(pick => recordCall({ ...pick, priceAtCall: pick.priceStatic }, "dashboard"));
+        const allText = picks.map(p => [p.summary,p.macro,p.fundamental,p.technical,p.sentiment,p.portfolio].filter(Boolean).join(" ")).join(" ");
         extractGlossaryTerms(allText);
-      } else setDashError(d.error || "No picks returned");
-    } catch { setDashError("Could not load picks — check your connection"); }
+      } else setDashError("No picks returned");
+    } catch (e) { setDashError(e.message || "Could not load picks — check your connection"); setDashStatus(null); }
     setDashLoading(false);
   }
 
@@ -2545,7 +2746,7 @@ export default function App() {
       .finally(() => setCallsPriceFetching(false));
   }, [tab]);
 
-  const allHoldings = [...cbHoldings,...bnHoldings,...ldgHoldings,...cmcHoldings];
+  const allHoldings = [...cbHoldings,...bnHoldings,...tigerHoldings,...ldgHoldings,...cmcHoldings];
 
   useEffect(() => {
     if (tab !== "coach" || allHoldings.length === 0) return;
@@ -2649,9 +2850,10 @@ export default function App() {
         const fr = await fetch(`/api/fundamentals/${encodeURIComponent(data.sym)}`);
         fundamentals = await fr.json();
       } catch {}
+      const iv = detailStock?.verdict || null;
       const r = await fetch("/api/analyse/detail", {
         method:"POST", headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({ sym:data.sym, name:data.name, candles:data.candles, range:data.range, currentPrice:data.currentPrice, currency:data.currency, indicators:data.indicators, fundamentals })
+        body:JSON.stringify({ sym:data.sym, name:data.name, candles:data.candles, range:data.range, currentPrice:data.currentPrice, currency:data.currency, indicators:data.indicators, fundamentals, initialVerdict:iv })
       });
       const d = await r.json();
       if (!d.error) {
@@ -2686,7 +2888,7 @@ export default function App() {
             ...(!isKnownCrypto ? [fetch(`/api/fundamentals/${upperQ}`).then(r=>r.json()).catch(()=>null)] : []),
           ];
           const [pd, fmpData] = await Promise.all(parallelFetches);
-          if (pd?.price) { livePrice = pd.price; livePriceCtx = ` The current live market price is $${pd.price.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})} USD as of today — base all price levels, support/resistance, and targets on this actual price.`; }
+          if (pd?.price) { livePrice = pd.price; const pdCcy = pd.currency || "USD"; livePriceCtx = ` The current live market price is $${pd.price.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})} ${pdCcy} as of today — base all price levels, support/resistance, and targets on this actual price.`; }
           if (fmpData) fundamentals = fmpData;
         } catch {}
       }
@@ -2705,14 +2907,47 @@ export default function App() {
         }
         if (parts.length) fundamentalsCtx = `\n\nLIVE FUNDAMENTALS (FMP): ${parts.join(" | ")}\nUse this live data for your fundamental analysis.`;
       }
-      const res = await fetch("/api/analyse", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({
+      // Stream analysis for faster perceived response
+      const streamRes = await fetch("/api/analyse/stream", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({
         model:"claude-sonnet-4-20250514", max_tokens:1000,
         system:`You are a senior investment analyst. Today is ${today}. Your training knowledge has a cutoff of approximately mid-2025 — do NOT present specific metrics from your training data (e.g. ETF flow volumes, exact hash rates, specific institutional inflow figures, dated earnings numbers) as if they are current facts for ${today}. For fundamentals, focus on structural and qualitative factors. If you cite a specific metric that may have changed, frame it as approximate or add "as of mid-2025". All macro commentary must reflect conditions as of ${today} — do not reference past rate decisions or events as if they are upcoming. For crypto assets (BTC, ETH, SOL etc) analyse the native coin/token directly — do NOT substitute an ETF or trust product. Respond ONLY with valid JSON, no markdown:
 {"sym":"TICKER","name":"Full name","sector":"sector","verdict":"BUY|WATCH|AVOID|HOLD","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","priceStatic":123.45,"target":"$X","upside":"+X%","up":true,"priceType":"stock or crypto","avgCurrency":"USD or AUD","priceCurrency":"USD or AUD","summary":"2-3 sentences","macro":"2-3 sentences","fundamental":"2-3 sentences","technical":"2-3 sentences","sentiment":"2-3 sentences","insider":"2-3 sentences","portfolio":"2-3 sentences"}`,
         messages:[{role:"user",content:`Analyse this investment: ${q}.${livePriceCtx}${fundamentalsCtx}`}]
       })});
-      const data = await res.json();
-      const text = data.content?.find(b=>b.type==="text")?.text||"";
+      const reader = streamRes.body.getReader();
+      const decoder = new TextDecoder();
+      let fullText = "";
+      let streamBuf = "";
+      const statusStages = [
+        { at: 50, msg: "Reading fundamentals..." },
+        { at: 150, msg: "Checking macro conditions..." },
+        { at: 300, msg: "Analysing technicals..." },
+        { at: 450, msg: "Evaluating sentiment..." },
+        { at: 600, msg: "Forming verdict..." },
+      ];
+      let charCount = 0;
+      let stageIdx = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        streamBuf += decoder.decode(value, { stream: true });
+        const lines = streamBuf.split("\n");
+        streamBuf = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ") || line.includes("[DONE]")) continue;
+          try {
+            const evt = JSON.parse(line.slice(6));
+            if (evt.t) { fullText += evt.t; charCount += evt.t.length; }
+            if (evt.error) throw new Error(evt.error);
+          } catch (e) { if (e.message && !e.message.includes("JSON")) throw e; }
+        }
+        if (stageIdx < statusStages.length && charCount >= statusStages[stageIdx].at) {
+          setSearchStatus(statusStages[stageIdx].msg);
+          stageIdx++;
+        }
+      }
+      setSearchStatus(null);
+      const text = fullText;
       const parsed = JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}")+1));
       setResult(parsed);
       recordCall({ ...parsed, priceAtCall: livePrice || parsed.priceStatic }, "explorer");
@@ -2731,7 +2966,7 @@ export default function App() {
             }
             // Run comprehensive analysis and update card verdict to match
             try {
-              const ar = await fetch("/api/analyse/detail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...d, fundamentals:detailFundamentals})});
+              const ar = await fetch("/api/analyse/detail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...d, fundamentals:detailFundamentals, initialVerdict:parsed.verdict})});
               const analysis = await ar.json();
               if(!analysis.error){
                 setExplorerAnalysis(analysis);
@@ -2747,7 +2982,7 @@ export default function App() {
         ...prev.filter(h => h.sym !== parsed.sym)
       ].slice(0, 10));
       fetch(`/api/price?sym=${parsed.sym}&type=${parsed.priceType}`).then(r=>r.json()).then(d=>setLP(p=>({...p,[parsed.sym]:d}))).catch(()=>{});
-    } catch { setSearchErr("Analysis failed — please try again."); }
+    } catch { setSearchErr("Analysis failed — please try again."); setSearchStatus(null); }
     setSearching(false);
   }
 
@@ -2756,9 +2991,9 @@ export default function App() {
     setWatchlist(prev => [{
       sym: stock.sym, name: stock.name, sector: stock.sector,
       priceType: stock.priceType || "stock",
-      priceCurrency: stock.priceCurrency || "USD",
+      priceCurrency: livePrices[stock.sym]?.currency || stock.priceCurrency || "USD",
       target: parseTargetNum(stock.target),
-      targetCcy: stock.avgCurrency || "USD",
+      targetCcy: livePrices[stock.sym]?.currency || stock.avgCurrency || "USD",
       addedAt: new Date().toISOString(),
       note: stock.summary ? stock.summary.slice(0, 100) + (stock.summary.length > 100 ? "…" : "") : "",
     }, ...prev]);
@@ -2783,7 +3018,7 @@ export default function App() {
       const r = await fetch("/api/screener", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ query }) });
       const d = await r.json();
       if (d.error) setScreenerError(d.error);
-      else { setScreenerResults(d); d.forEach(pick => recordCall({...pick, priceAtCall: pick.priceStatic}, "screener")); }
+      else { setScreenerResults(d); d.filter(pick => ["BUY","WATCH"].includes(pick.verdict)).forEach(pick => recordCall({...pick, priceAtCall: pick.priceStatic}, "screener")); }
     } catch { setScreenerError("Screener failed — please try again."); }
     setScreenerLoading(false);
   }
@@ -2832,7 +3067,7 @@ export default function App() {
       const r = await fetch("/api/analyse", {
         method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({
-          model:"claude-sonnet-4-20250514", max_tokens:600,
+          model:"claude-haiku-4-5-20251001", max_tokens:600,
           system:`You are a senior analyst. Today is ${today}. Return ONLY valid JSON:
 {"watch":"Key metric/number to watch for","consensus":"What the market expects — be specific","risk":"Main earnings risk in 1 sentence","setup":"Technical/positioning setup going into earnings in 1 sentence","verdict":"BEAT_LIKELY|MISS_LIKELY|IN_LINE|UNCERTAIN"}`,
           messages:[{role:"user",content:`Pre-earnings brief for ${sym}. Upcoming date: ${upcomingDate||"next quarter"}. ${surpriseCtx} What should investors watch?`}],
@@ -2850,14 +3085,15 @@ export default function App() {
     setCallRecords(prev => {
       // Never overwrite an existing record — preserve the original call date and entry price
       if (prev.find(c => c.sym === parsed.sym)) return prev;
+      const lp = livePrices[parsed.sym];
       const record = {
         id: `${parsed.sym}-${Date.now()}`,
         sym: parsed.sym,           name: parsed.name || parsed.sym,
         verdict: parsed.verdict,   conviction: parsed.conviction || "MEDIUM",
         horizon: parsed.horizon || "Medium",
-        priceAtCall:   livePrices[parsed.sym]?.price || parsed.priceAtCall || parsed.priceStatic || null,
+        priceAtCall:   lp?.price || parsed.priceAtCall || parsed.priceStatic || null,
         priceType:     parsed.priceType    || "stock",
-        priceCurrency: parsed.priceCurrency|| "USD",
+        priceCurrency: lp?.currency || parsed.priceCurrency || "USD",
         calledAt: new Date().toISOString(),
         target: parsed.target || null,
         source,
@@ -2902,6 +3138,15 @@ export default function App() {
                 )}
               </button>
             ))}
+            <div style={{ borderTop:"1px solid var(--border)", margin:"8px 0 4px", paddingTop:8 }}>
+              <button className="nav-item" onClick={()=>openGlossary()} style={{ color:"var(--amber)", width:"100%" }}>
+                <span style={{ fontSize:14 }}>◈</span>
+                <span>Glossary</span>
+                {customTerms.length > 0 && (
+                  <span style={{ marginLeft:"auto", background:"var(--amber)20", color:"var(--amber)", borderRadius:6, padding:"1px 7px", fontSize:10, fontFamily:"var(--ff-mono)", border:"1px solid var(--amber)40" }}>{customTerms.length}</span>
+                )}
+              </button>
+            </div>
           </nav>
           <div style={{ padding:"16px 8px 0", borderTop:"1px solid var(--border)", marginTop:16 }}>
             <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
@@ -2927,7 +3172,7 @@ export default function App() {
                     <h1 style={{ fontFamily:"var(--ff-head)", fontSize:28, fontWeight:800, letterSpacing:"-0.03em", color:"var(--text2)", lineHeight:1.2, marginBottom:6 }}>
                       {(()=>{const h=new Date().getHours();return h<12?"Good morning.":h<17?"Good afternoon.":"Good evening.";})()}<br/>
                       <span style={{ color:"var(--muted2)", fontWeight:600, fontSize:22 }}>
-                        {dashLoading ? "Generating picks…" : dashPicks.length > 0 ? `${dashPicks.length} high-conviction picks today.` : "Today's top picks."}
+                        {dashLoading ? (dashStatus || "Generating picks…") : dashPicks.length > 0 ? `${dashPicks.length} high-conviction picks today.` : "Today's top picks."}
                       </span>
                     </h1>
                     <p style={{ fontSize:11, color:"var(--muted)", fontFamily:"var(--ff-mono)", letterSpacing:"0.06em" }}>
@@ -2952,6 +3197,7 @@ export default function App() {
               {/* Loading shimmer */}
               {dashLoading && dashPicks.length === 0 && (
                 <div style={{display:"grid",gap:12,marginBottom:28}}>
+                  {dashStatus&&<div style={{fontSize:13,color:"var(--green)",fontFamily:"var(--ff-head)",fontWeight:600,marginBottom:4,display:"flex",alignItems:"center",gap:8}}><span style={{width:8,height:8,borderRadius:"50%",background:"var(--green)",display:"inline-block",animation:"pulse 1.5s infinite"}}></span>{dashStatus}</div>}
                   {[1,2,3].map(i=>(
                     <div key={i} className="card" style={{padding:20}}>
                       <div style={{display:"flex",gap:12,marginBottom:14,alignItems:"center"}}>
@@ -2983,7 +3229,7 @@ export default function App() {
                 <div className="fu3">
                   <div className="section-label">TOP PICKS TODAY</div>
                   {dashPicks.map(s=>(
-                    <StockCard key={s.sym} stock={s} expanded={expanded===s.sym} onToggle={()=>setExp(expanded===s.sym?null:s.sym)} livePrices={livePrices} displayCcy={displayCcy} audUsd={audUsd} onViewChart={()=>openDetail({sym:s.sym,name:s.name,priceType:s.priceType,priceCurrency:s.priceCurrency||"USD",sector:s.sector},s)} onAddWatchlist={()=>addToWatchlist(s)} inWatchlist={!!watchlist.find(w=>w.sym===s.sym)}/>
+                    <StockCard key={s.sym} stock={s} expanded={expanded===s.sym} onToggle={()=>setExp(expanded===s.sym?null:s.sym)} livePrices={livePrices} displayCcy={displayCcy} audUsd={audUsd} onViewChart={()=>openDetail({sym:s.sym,name:s.name,priceType:s.priceType,priceCurrency:s.priceCurrency||"USD",sector:s.sector},s)} onAddWatchlist={()=>addToWatchlist(s)} inWatchlist={!!watchlist.find(w=>w.sym===s.sym)} onTrade={s.priceType==="crypto"&&(cbLastSync||bnLastSync)?()=>setTradeModal({sym:s.sym,name:s.name,productId:`${s.sym}-USD`,side:"BUY",priceType:"crypto"}):undefined}/>
                   ))}
                 </div>
               )}
@@ -3004,12 +3250,15 @@ export default function App() {
               </div>
               <div className="fu2" style={{display:"flex",gap:8,marginBottom:20}}>
                 <input value={searchQ} onChange={e=>setSearchQ(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleSearch()} placeholder="e.g. NVIDIA, BHP, Bitcoin…" style={{flex:1,background:"var(--card)",border:"1px solid var(--border)",borderRadius:10,padding:"13px 18px",color:"var(--text2)",fontSize:14}}/>
-                <button onClick={handleSearch} disabled={searching} style={{background:searching?"var(--card)":"var(--green)",color:searching?"var(--muted)":"#0a0a14",border:"none",borderRadius:10,padding:"13px 28px",fontSize:13,fontFamily:"var(--ff-head)",fontWeight:700,opacity:searching?.7:1}}>
-                  {searching?"Analysing…":"Analyse →"}
+                <button onClick={()=>handleSearch()} disabled={searching} style={{background:searching?"var(--card)":"var(--green)",color:searching?"var(--muted)":"#0a0a14",border:"none",borderRadius:10,padding:"13px 28px",fontSize:13,fontFamily:"var(--ff-head)",fontWeight:700,opacity:searching?.7:1,cursor:searching?"default":"pointer"}}>
+                  {searching?(searchStatus||"Analysing…"):"Analyse →"}
                 </button>
               </div>
 
-              {searching&&<div style={{display:"grid",gap:10,marginBottom:20}}>{[85,65,75].map((w,i)=><div key={i} className="shimmer-el" style={{height:20,width:`${w}%`}}/>)}</div>}
+              {searching&&<div style={{display:"grid",gap:10,marginBottom:20}}>
+                {searchStatus&&<div style={{fontSize:13,color:"var(--green)",fontFamily:"var(--ff-head)",fontWeight:600,marginBottom:4,display:"flex",alignItems:"center",gap:8}}><span style={{width:8,height:8,borderRadius:"50%",background:"var(--green)",display:"inline-block",animation:"pulse 1.5s infinite"}}></span>{searchStatus}</div>}
+                {[85,65,75].map((w,i)=><div key={i} className="shimmer-el" style={{height:20,width:`${w}%`}}/>)}
+              </div>}
               {searchError&&<div style={{background:"#ff525212",border:"1px solid #ff525230",borderRadius:10,padding:16,color:"var(--red)",fontSize:13,marginBottom:20}}>{searchError}</div>}
 
               {searchResult&&!searching&&(
@@ -3020,6 +3269,7 @@ export default function App() {
                     onAddWatchlist={() => addToWatchlist(searchResult)}
                     inWatchlist={!!watchlist.find(w => w.sym === searchResult.sym)}
                     onViewChart={() => openDetail({ sym:searchResult.sym, name:searchResult.name, priceType:searchResult.priceType, priceCurrency:searchResult.priceCurrency||"USD", sector:searchResult.sector }, searchResult, explorerAnalysis)}
+                    onTrade={searchResult.priceType==="crypto"&&(cbLastSync||bnLastSync)?()=>setTradeModal({sym:searchResult.sym,name:searchResult.name,productId:`${searchResult.sym}-USD`,side:"BUY",priceType:"crypto"}):searchResult.priceType==="stock"&&tigerLastSync?()=>setTradeModal({sym:searchResult.sym,name:searchResult.name,side:"BUY",priceType:"stock",exchange:"tiger"}):undefined}
                   />
                   {explorerChartLoading && (
                     <div className="shimmer-el" style={{height:260,marginTop:16,borderRadius:14}}/>
@@ -3029,8 +3279,13 @@ export default function App() {
                       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
                         <span style={{fontSize:10,fontFamily:"var(--ff-mono)",color:"var(--muted)",letterSpacing:"0.12em",textTransform:"uppercase"}}>Price Chart — 1 Month</span>
                         <div style={{display:"flex",gap:8}}>
-                          {searchResult?.priceType==="crypto" && cbLastSync && !cbError && (
+                          {searchResult?.priceType==="crypto" && (cbLastSync || bnLastSync) && (
                             <button onClick={()=>setTradeModal({sym:searchResult.sym,name:searchResult.name,productId:`${searchResult.sym}-USD`,side:"BUY",priceType:"crypto"})} style={{background:"#00e67610",border:"1px solid #00e67640",borderRadius:7,padding:"4px 12px",fontSize:10,color:"var(--green)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",fontWeight:700}}>
+                              ↔ TRADE
+                            </button>
+                          )}
+                          {searchResult?.priceType==="stock" && tigerLastSync && (
+                            <button onClick={()=>setTradeModal({sym:searchResult.sym,name:searchResult.name,side:"BUY",priceType:"stock",exchange:"tiger"})} style={{background:"#00e67610",border:"1px solid #00e67640",borderRadius:7,padding:"4px 12px",fontSize:10,color:"var(--green)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",fontWeight:700}}>
                               ↔ TRADE
                             </button>
                           )}
@@ -3039,7 +3294,7 @@ export default function App() {
                           </button>
                         </div>
                       </div>
-                      <ChartCanvas candles={explorerChart.candles} analysis={null} range="1mo" currency={explorerChart.currency} indicators={explorerChart.indicators}/>
+                      <ChartCanvas candles={explorerChart.candles} analysis={null} range="1mo" currency={explorerChart.currency} indicators={explorerChart.indicators} displayCcy={displayCcy} audUsd={audUsd}/>
                     </div>
                   )}
                   <button onClick={()=>{setResult(null);setSearchQ("");setExplorerChart(null);}} style={{marginTop:8,background:"none",border:"none",fontSize:10,color:"var(--muted)",fontFamily:"var(--ff-mono)",padding:0,letterSpacing:"0.06em",cursor:"pointer"}}>
@@ -3066,7 +3321,7 @@ export default function App() {
                               <SectorBadge sector={h.sector}/>
                             </div>
                             <div style={{display:"flex",gap:10,alignItems:"center",flexShrink:0}}>
-                              {h.analysedAt && <span style={{fontSize:10,color:"var(--muted)",fontFamily:"var(--ff-mono)"}}>{new Date(h.analysedAt).toLocaleDateString("en-AU",{day:"numeric",month:"short"})}</span>}
+                              {h.analysedAt && <span style={{fontSize:10,color:"var(--muted)",fontFamily:"var(--ff-mono)"}}>{fmtDate(h.analysedAt)}</span>}
                               <span style={{fontSize:10,color:"var(--green)",fontFamily:"var(--ff-mono)"}}>VIEW →</span>
                             </div>
                           </div>
@@ -3152,7 +3407,13 @@ export default function App() {
                 </div>
               )}
 
-              {screenerError && <div style={{background:"#ff525212",border:"1px solid #ff525230",borderRadius:10,padding:16,color:"var(--red)",fontSize:13,marginBottom:20}}>{screenerError}</div>}
+              {screenerError && !screenerLoading && (
+                <div style={{background:"#ff525212",border:"1px solid #ff525230",borderRadius:12,padding:"20px 24px",marginBottom:20}}>
+                  <div style={{fontSize:10,fontFamily:"var(--ff-mono)",color:"var(--red)",letterSpacing:"0.08em",marginBottom:6}}>SCREENING FAILED</div>
+                  <p style={{fontSize:13,color:"var(--muted2)",marginBottom:14}}>{screenerError}</p>
+                  <button onClick={()=>runScreener()} style={{background:"none",border:"1px solid #ff525240",borderRadius:7,padding:"7px 16px",fontSize:11,color:"var(--red)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",cursor:"pointer"}}>TRY AGAIN</button>
+                </div>
+              )}
 
               {screenerResults && !screenerLoading && (
                 <div className="fi">
@@ -3179,8 +3440,8 @@ export default function App() {
                           <p style={{fontSize:13,color:"var(--muted2)",lineHeight:1.7,maxWidth:600}}>{s.summary}</p>
                         </div>
                         <div style={{textAlign:"right",flexShrink:0}}>
-                          <div style={{fontFamily:"var(--ff-mono)",fontSize:18,fontWeight:600,color:"var(--text2)",marginBottom:3}}>{s.priceStatic ? `$${s.priceStatic.toLocaleString()}` : "—"}</div>
-                          <div style={{fontSize:11,color:"var(--muted)",fontFamily:"var(--ff-mono)"}}>tgt {s.target}</div>
+                          <div style={{fontFamily:"var(--ff-mono)",fontSize:18,fontWeight:600,color:"var(--text2)",marginBottom:3}}>{s.priceStatic ? fmtMoney(toDisplay(s.priceStatic, s.priceCurrency || "USD", displayCcy, audUsd), displayCcy) : "—"}</div>
+                          <div style={{fontSize:11,color:"var(--muted)",fontFamily:"var(--ff-mono)"}}>tgt {(() => { const tn = parseTargetNum(s.target); if (tn == null) return s.target; return fmtMoney(toDisplay(tn, s.priceCurrency || "USD", displayCcy, audUsd), displayCcy); })()}</div>
                         </div>
                       </div>
                       <div style={{marginTop:12,display:"flex",gap:8,flexWrap:"wrap"}}>
@@ -3211,7 +3472,7 @@ export default function App() {
 
               <div className="fu2" style={{display:"flex",gap:6,marginBottom:24,flexWrap:"wrap"}}>
                 {PORT_TABS.map(t=>{
-                  const count=t.id==="all"?allHoldings.length:t.id==="coinbase"?cbHoldings.length:t.id==="binance"?bnHoldings.length:t.id==="ledger"?ldgHoldings.length:cmcHoldings.length;
+                  const count=t.id==="all"?allHoldings.length:t.id==="coinbase"?cbHoldings.length:t.id==="binance"?bnHoldings.length:t.id==="tiger"?tigerHoldings.length:t.id==="ledger"?ldgHoldings.length:cmcHoldings.length;
                   const isActive=portTab===t.id;
                   return (
                     <button key={t.id} onClick={()=>setPortTab(t.id)} style={{background:isActive?`${t.color}18`:"none",border:`1px solid ${isActive?`${t.color}50`:"var(--border)"}`,borderRadius:10,padding:"8px 20px",fontSize:12,fontWeight:isActive?600:400,color:isActive?t.color:"var(--muted2)"}}>
@@ -3248,7 +3509,7 @@ export default function App() {
                             const avgUSD   = toDisplay(h.avg, h.avgCurrency || "USD", "USD", audUsd);
                             const valueUSD = priceUSD != null ? h.qty * priceUSD : h.qty * avgUSD;
                             const weight   = totalPortUSD > 0 ? (valueUSD / totalPortUSD) * 100 : null;
-                            return <HoldingRow key={`${h.source}-${h.sym}`} holding={h} livePrice={livePrices[h.sym]} expanded={portExp===`${h.source}-${h.sym}`} onToggle={()=>setPortExp(p=>p===`${h.source}-${h.sym}`?null:`${h.source}-${h.sym}`)} onRemove={h.source==="cmc"?()=>setCmc(p=>p.filter(x=>x.sym!==h.sym)):null} onViewChart={()=>openDetail({sym:h.sym,name:h.name,priceType:h.priceType,priceCurrency:h.priceCurrency||"USD",sector:h.sector})} onTrade={(h.source==="coinbase"||h.source==="binance")?cfg=>setTradeModal({...cfg,exchange:h.source}):null} displayCcy={displayCcy} audUsd={audUsd} portWeight={weight}/>;
+                            return <HoldingRow key={`${h.source}-${h.sym}`} holding={h} livePrice={livePrices[h.sym]} expanded={portExp===`${h.source}-${h.sym}`} onToggle={()=>setPortExp(p=>p===`${h.source}-${h.sym}`?null:`${h.source}-${h.sym}`)} onRemove={h.source==="cmc"?()=>setCmc(p=>p.filter(x=>x.sym!==h.sym)):null} onViewChart={()=>openDetail({sym:h.sym,name:h.name,priceType:h.priceType,priceCurrency:h.priceCurrency||"USD",sector:h.sector})} onTrade={(h.source==="coinbase"||h.source==="binance"||h.source==="tiger")?cfg=>setTradeModal({...cfg,exchange:h.source}):null} displayCcy={displayCcy} audUsd={audUsd} portWeight={weight}/>;
                           });
                         })()}
                       </div>
@@ -3274,6 +3535,55 @@ export default function App() {
 
               {portTab==="binance"&&(
                 <SourcePanel label="Binance" color="#F0B90B" holdings={bnHoldings} livePrices={livePrices} syncing={bnSyncing} lastSync={bnLastSync} error={bnError} onSync={syncBinance} onRemove={sym=>setBn(p=>p.filter(h=>h.sym!==sym))} onViewChart={h=>openDetail({sym:h.sym,name:h.name,priceType:h.priceType,priceCurrency:h.priceCurrency||"USD",sector:h.sector})} onTrade={cfg=>setTradeModal({...cfg,exchange:"binance"})} displayCcy={displayCcy} audUsd={audUsd}/>
+              )}
+
+              {portTab==="tiger"&&(
+                <div>
+                <SourcePanel label="Tiger" color="#FF6600" holdings={tigerHoldings} livePrices={livePrices} syncing={tigerSyncing} lastSync={tigerLastSync} error={tigerError} onSync={syncTiger} onRemove={sym=>setTiger(p=>p.filter(h=>h.sym!==sym))} onViewChart={h=>openDetail({sym:h.sym,name:h.name,priceType:h.priceType,priceCurrency:h.priceCurrency||h.avgCurrency||"AUD",sector:h.sector})} onTrade={cfg=>setTradeModal({...cfg,exchange:"tiger"})} displayCcy={displayCcy} audUsd={audUsd}/>
+
+                {/* Tiger Orders */}
+                <div style={{marginTop:28}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+                    <span style={{fontSize:11,fontFamily:"var(--ff-mono)",fontWeight:700,color:"var(--muted2)",letterSpacing:"0.08em"}}>ORDERS ({tigerOrders.length})</span>
+                    <button onClick={syncTigerOrders} disabled={tigerOrdersLoading} style={{background:"none",border:"1px solid var(--border)",borderRadius:8,padding:"5px 12px",fontSize:10,color:tigerOrdersLoading?"var(--muted)":"var(--muted2)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",opacity:tigerOrdersLoading?.5:1}}>
+                      {tigerOrdersLoading?"↻ LOADING…":"↻ REFRESH"}
+                    </button>
+                  </div>
+                  {tigerOrders.length===0?(
+                    <div className="card" style={{padding:"36px 24px",textAlign:"center"}}>
+                      <p style={{color:"var(--muted2)",fontSize:13,fontFamily:"var(--ff-head)",fontWeight:600}}>No orders yet</p>
+                      <p style={{color:"var(--muted)",fontSize:12,marginTop:6}}>Orders placed via Tiger will appear here.</p>
+                    </div>
+                  ):(
+                    <div style={{display:"grid",gap:8}}>
+                      {tigerOrders.map(o=>{
+                        const isBuy = (o.action||"").toUpperCase()==="BUY";
+                        const st = (o.status||"").toUpperCase();
+                        const isFaded = st.includes("INVALID")||st.includes("CANCEL")||st.includes("REJECT");
+                        const stColor = st.includes("FILL")?"var(--green)":st.includes("PEND")||st.includes("INIT")||st.includes("NEW")?"var(--amber)":st.includes("INVALID")||st.includes("REJECT")?"var(--red)":"var(--muted)";
+                        return (
+                          <div key={o.id} className="card" style={{padding:16,borderLeft:`3px solid ${isBuy?"var(--green)":"var(--red)"}`,opacity:isFaded?0.55:1}}>
+                            <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:6,flexWrap:"wrap"}}>
+                              <span className="badge" style={{background:isBuy?"#00e67618":"#ff525218",color:isBuy?"var(--green)":"var(--red)",border:`1px solid ${isBuy?"#00e67640":"#ff525240"}`}}>{o.action}</span>
+                              <span style={{fontFamily:"var(--ff-head)",fontSize:15,fontWeight:700,color:"var(--text2)"}}>{o.symbol}</span>
+                              <span className="badge" style={{background:stColor+"18",color:stColor,border:`1px solid ${stColor}40`}}>{o.status}</span>
+                            </div>
+                            <div style={{fontSize:11,fontFamily:"var(--ff-mono)",color:"var(--muted2)",display:"flex",gap:14,flexWrap:"wrap"}}>
+                              <span>Qty: {o.qty}</span>
+                              {o.limitPrice!=null&&<span>Limit: {o.limitPrice}</span>}
+                              {o.filledQty>0&&<span>Filled: {o.filledQty}</span>}
+                              {o.avgFillPrice!=null&&o.avgFillPrice>0&&<span>Avg: {o.avgFillPrice}</span>}
+                              {o.currency&&<span>{o.currency}</span>}
+                            </div>
+                            {o.openTime&&<div style={{fontSize:10,fontFamily:"var(--ff-mono)",color:"var(--muted)",marginTop:6}}>{new Date(typeof o.openTime==="number"?o.openTime:o.openTime).toLocaleString()}</div>}
+                            {o.remark&&<p style={{fontSize:11,color:"var(--amber)",marginTop:6,fontStyle:"italic",lineHeight:1.4}}>{o.remark}</p>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+                </div>
               )}
 
               {portTab==="ledger"&&(
@@ -3380,7 +3690,7 @@ export default function App() {
                             </div>
                             <div style={{textAlign:"right",flexShrink:0}}>
                               <div style={{fontSize:11,fontFamily:"var(--ff-mono)",color:!isPast&&diffDays<=7?"var(--amber)":"var(--muted2)",fontWeight:600,marginBottom:4}}>{countdown}</div>
-                              <div style={{fontSize:10,color:"var(--muted)",fontFamily:"var(--ff-mono)"}}>{ev.date}</div>
+                              <div style={{fontSize:10,color:"var(--muted)",fontFamily:"var(--ff-mono)"}}>{fmtDate(ev.date)}</div>
                             </div>
                           </div>
                         </div>
@@ -3449,7 +3759,7 @@ export default function App() {
                 <div style={{display:"grid",gap:8}}>
                   {watchlist.map(w => {
                     const lp = livePrices[w.sym];
-                    const priceCcy = w.priceCurrency || lp?.currency || "USD";
+                    const priceCcy = lp?.currency || w.priceCurrency || "USD";
                     const rawPrice = lp?.price;
                     const dispPrice = rawPrice ? toDisplay(rawPrice, priceCcy, displayCcy, audUsd) : null;
                     const targetDisp = w.target ? toDisplay(w.target, w.targetCcy || "USD", displayCcy, audUsd) : null;
@@ -3784,7 +4094,7 @@ export default function App() {
                             <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:3,flexWrap:"wrap"}}>
                               <span style={{fontFamily:"var(--ff-head)",fontSize:14,fontWeight:700,color:"var(--text2)"}}>{e.sym}</span>
                               <span style={{fontSize:11,fontFamily:"var(--ff-mono)",color:countdownColor,fontWeight:600}}>{countdown}</span>
-                              <span style={{fontSize:10,color:"var(--muted)",fontFamily:"var(--ff-mono)"}}>{e.date}</span>
+                              <span style={{fontSize:10,color:"var(--muted)",fontFamily:"var(--ff-mono)"}}>{fmtDate(e.date)}</span>
                               {e.time && <span className="badge" style={{background:"var(--surface)",color:"var(--muted2)",border:"1px solid var(--border)"}}>{e.time}</span>}
                             </div>
                             {!e.isFuture && surprise != null && (
@@ -3945,18 +4255,27 @@ export default function App() {
                 }).map(c => {
                   const cp = callsPrices[c.sym]?.price;
                   const ret = ((cp - c.priceAtCall) / c.priceAtCall) * 100;
-                  const win = (["BUY","HOLD"].includes(c.verdict) && ret > 0) || (["AVOID","SELL"].includes(c.verdict) && ret < 0);
-                  return { ...c, returnPct: ret, win };
+                  return { ...c, returnPct: ret };
                 });
 
+                // BUY stats (only BUY verdicts)
                 const buyCallsWithPrices = withPrices.filter(c => c.verdict === "BUY");
-                const buyWins = buyCallsWithPrices.filter(c => c.win).length;
+                const buyWins = buyCallsWithPrices.filter(c => c.returnPct > 0).length;
                 const buyWinRate = buyCallsWithPrices.length >= 3 ? (buyWins / buyCallsWithPrices.length * 100) : null;
                 const avgBuyReturn = buyCallsWithPrices.length > 0
                   ? buyCallsWithPrices.reduce((s, c) => s + c.returnPct, 0) / buyCallsWithPrices.length
                   : null;
-                const best  = withPrices.length > 0 ? withPrices.reduce((a, b) => a.returnPct > b.returnPct ? a : b) : null;
-                const worst = withPrices.length > 0 ? withPrices.reduce((a, b) => a.returnPct < b.returnPct ? a : b) : null;
+
+                // AVOID stats (correct = stock went down)
+                const avoidCalls = withPrices.filter(c => c.verdict === "AVOID" || c.verdict === "SELL");
+                const avoidCorrect = avoidCalls.filter(c => c.returnPct < 0).length;
+                const avoidRate = avoidCalls.length >= 3 ? (avoidCorrect / avoidCalls.length * 100) : null;
+                const avgAvoidReturn = avoidCalls.length > 0
+                  ? avoidCalls.reduce((s, c) => s + c.returnPct, 0) / avoidCalls.length
+                  : null;
+
+                const best  = buyCallsWithPrices.length > 0 ? buyCallsWithPrices.reduce((a, b) => a.returnPct > b.returnPct ? a : b) : null;
+                const worst = buyCallsWithPrices.length > 0 ? buyCallsWithPrices.reduce((a, b) => a.returnPct < b.returnPct ? a : b) : null;
 
                 const verdictCounts = { BUY:0, WATCH:0, AVOID:0, HOLD:0 };
                 callRecords.forEach(c => { if (verdictCounts[c.verdict] != null) verdictCounts[c.verdict]++; });
@@ -3966,13 +4285,13 @@ export default function App() {
                 return (
                   <>
                     {/* Stats strip */}
-                    <div className="fu2" style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:12,marginBottom:24}}>
+                    <div className="fu2" style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:12,marginBottom:12}}>
                       {[
                         { l:"TOTAL CALLS", v:`${callRecords.length}`, c:"var(--text2)", sub:null },
                         { l:"BUY WIN RATE", v: buyWinRate != null ? `${buyWinRate.toFixed(0)}%` : buyCallsWithPrices.length < 3 ? `need ${3 - buyCallsWithPrices.length} more` : "—", c: buyWinRate != null ? (buyWinRate >= 50 ? "var(--green)" : "var(--red)") : "var(--muted)", sub: buyCallsWithPrices.length > 0 ? `${buyWins}/${buyCallsWithPrices.length} BUYs` : null },
                         { l:"AVG BUY RETURN", v: avgBuyReturn != null ? `${avgBuyReturn >= 0 ? "+" : ""}${avgBuyReturn.toFixed(1)}%` : "—", c: avgBuyReturn != null ? (avgBuyReturn >= 0 ? "var(--green)" : "var(--red)") : "var(--muted)", sub:null },
-                        { l:"BEST CALL", v: best ? `${best.returnPct >= 0 ? "+" : ""}${best.returnPct.toFixed(1)}%` : "—", c:"var(--green)", sub: best ? best.sym : null },
-                        { l:"WORST CALL", v: worst ? `${worst.returnPct >= 0 ? "+" : ""}${worst.returnPct.toFixed(1)}%` : "—", c:"var(--red)", sub: worst ? worst.sym : null },
+                        { l:"BEST BUY", v: best ? `${best.returnPct >= 0 ? "+" : ""}${best.returnPct.toFixed(1)}%` : "—", c:"var(--green)", sub: best ? best.sym : null },
+                        { l:"WORST BUY", v: worst ? `${worst.returnPct >= 0 ? "+" : ""}${worst.returnPct.toFixed(1)}%` : "—", c:"var(--red)", sub: worst ? worst.sym : null },
                       ].map(m => (
                         <div key={m.l} className="stat-card">
                           <div style={{fontSize:9,fontFamily:"var(--ff-mono)",color:"var(--muted)",letterSpacing:"0.12em",marginBottom:10}}>{m.l}</div>
@@ -3981,6 +4300,21 @@ export default function App() {
                         </div>
                       ))}
                     </div>
+                    {avoidCalls.length > 0 && (
+                    <div className="fu2" style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:24}}>
+                      {[
+                        { l:"AVOID ACCURACY", v: avoidRate != null ? `${avoidRate.toFixed(0)}%` : avoidCalls.length < 3 ? `need ${3 - avoidCalls.length} more` : "—", c: avoidRate != null ? (avoidRate >= 50 ? "var(--green)" : "var(--red)") : "var(--muted)", sub: avoidCalls.length > 0 ? `${avoidCorrect}/${avoidCalls.length} correct` : null },
+                        { l:"AVG AVOIDED LOSS", v: avgAvoidReturn != null ? `${avgAvoidReturn >= 0 ? "+" : ""}${avgAvoidReturn.toFixed(1)}%` : "—", c: avgAvoidReturn != null ? (avgAvoidReturn < 0 ? "var(--green)" : "var(--red)") : "var(--muted)", sub: avgAvoidReturn != null && avgAvoidReturn < 0 ? "you dodged this" : null },
+                        { l:"AVOIDS TRACKED", v:`${avoidCalls.length}`, c:"var(--text2)", sub:null },
+                      ].map(m => (
+                        <div key={m.l} className="stat-card">
+                          <div style={{fontSize:9,fontFamily:"var(--ff-mono)",color:"var(--muted)",letterSpacing:"0.12em",marginBottom:10}}>{m.l}</div>
+                          <div style={{fontSize:20,fontFamily:"var(--ff-head)",fontWeight:800,color:m.c,lineHeight:1}}>{m.v}</div>
+                          {m.sub && <div style={{fontSize:10,color:"var(--muted2)",marginTop:5,fontFamily:"var(--ff-mono)"}}>{m.sub}</div>}
+                        </div>
+                      ))}
+                    </div>
+                    )}
 
                     {/* Filter pills */}
                     <div className="fu3" style={{display:"flex",gap:6,marginBottom:20,flexWrap:"wrap"}}>
@@ -4152,13 +4486,13 @@ export default function App() {
                             <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:4,flexWrap:"wrap"}}>
                               <span className="badge" style={{background:e.action==="BUY"?"#00e67618":"#ff525218",color:e.action==="BUY"?"var(--green)":"var(--red)",border:`1px solid ${e.action==="BUY"?"#00e67640":"#ff525240"}`}}>{e.action}</span>
                               <span style={{fontFamily:"var(--ff-head)",fontSize:15,fontWeight:700,color:"var(--text2)"}}>{e.sym}</span>
-                              <span style={{fontSize:11,fontFamily:"var(--ff-mono)",color:"var(--muted)"}}>{e.date}</span>
+                              <span style={{fontSize:11,fontFamily:"var(--ff-mono)",color:"var(--muted)"}}>{fmtDate(e.date)}</span>
                               {isClosed && <span className="badge" style={{background:"var(--surface)",color:"var(--muted)",border:"1px solid var(--border)"}}>CLOSED</span>}
                               {pnlPct != null && <span style={{fontSize:11,fontFamily:"var(--ff-mono)",color:pnlPct>=0?"var(--green)":"var(--red)",fontWeight:600}}>{pnlPct>=0?"+":""}{pnlPct.toFixed(1)}%</span>}
                             </div>
                             <div style={{fontSize:11,fontFamily:"var(--ff-mono)",color:"var(--muted2)"}}>
                               {e.qty} × {e.currency}{e.price}
-                              {isClosed && ` → ${e.currency}${e.exitPrice} (${e.exitDate})`}
+                              {isClosed && ` → ${e.currency}${e.exitPrice} (${fmtDate(e.exitDate)})`}
                             </div>
                             {e.thesis && <p style={{fontSize:11,color:"var(--muted)",marginTop:6,fontStyle:"italic",lineHeight:1.4}}>{e.thesis}</p>}
                           </div>
@@ -4246,8 +4580,13 @@ export default function App() {
                       </div>
                     </div>
                     <div style={{display:"flex",gap:8,alignItems:"flex-start",flexWrap:"wrap"}}>
-                      {detailSym?.priceType==="crypto" && cbLastSync && !cbError && (
+                      {detailSym?.priceType==="crypto" && (cbLastSync || bnLastSync) && (
                         <button onClick={()=>setTradeModal({sym:detailSym.sym,name:detailSym.name,productId:`${detailSym.sym}-USD`,side:"BUY",priceType:"crypto"})} style={{background:"#00e67610",border:"1px solid #00e67640",borderRadius:8,padding:"8px 18px",fontSize:11,color:"var(--green)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",fontWeight:700,cursor:"pointer"}}>
+                          ↔ TRADE
+                        </button>
+                      )}
+                      {detailSym?.priceType==="stock" && tigerLastSync && (
+                        <button onClick={()=>setTradeModal({sym:detailSym.sym,name:detailSym.name,side:"BUY",priceType:"stock",exchange:"tiger"})} style={{background:"#00e67610",border:"1px solid #00e67640",borderRadius:8,padding:"8px 18px",fontSize:11,color:"var(--green)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",fontWeight:700,cursor:"pointer"}}>
                           ↔ TRADE
                         </button>
                       )}
@@ -4282,7 +4621,7 @@ export default function App() {
                   </div>
                 )}
                 {!chartLoading && chartData?.candles?.length > 0 && (
-                  <ChartCanvas candles={chartData.candles} analysis={detailAnalysis} range={chartRange} currency={chartData.currency} indicators={chartData.indicators}/>
+                  <ChartCanvas candles={chartData.candles} analysis={detailAnalysis} range={chartRange} currency={chartData.currency} indicators={chartData.indicators} displayCcy={displayCcy} audUsd={audUsd}/>
                 )}
                 {!chartLoading && !chartData && (
                   <div style={{height:420,display:"flex",alignItems:"center",justifyContent:"center"}}>
@@ -4399,7 +4738,7 @@ export default function App() {
         </main>
       </div>
       {tradeModal && (
-        <TradeModal config={tradeModal} onClose={()=>setTradeModal(null)} onSuccess={(ex)=>{setTradeModal(null);ex==="binance"?syncBinance():syncCoinbase();}} displayCcy={displayCcy} audUsd={audUsd} />
+        <TradeModal config={tradeModal} onClose={()=>setTradeModal(null)} onSuccess={(ex)=>{setTradeModal(null);if(ex==="binance")syncBinance();else if(ex==="tiger"){syncTiger();syncTigerOrders();}else syncCoinbase();}} displayCcy={displayCcy} audUsd={audUsd} />
       )}
       <GlossaryModal open={glossaryOpen} onClose={()=>setGlossaryOpen(false)} focusTerm={glossaryTerm} allGlossary={allGlossary}/>
     </>

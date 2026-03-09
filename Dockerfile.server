@@ -5,6 +5,7 @@ COPY server-package.json ./package.json
 RUN npm install
 COPY server.js ./
 COPY .env* ./
+COPY tiger_private_key.pem ./
 
 EXPOSE 3001
 CMD ["node", "server.js"]

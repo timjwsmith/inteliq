@@ -16,6 +16,19 @@ const BINANCE_API_KEY    = process.env.BINANCE_API_KEY    || "";
 const BINANCE_API_SECRET = process.env.BINANCE_API_SECRET || "";
 const FINNHUB_API_KEY     = process.env.FINNHUB_API_KEY     || "";
 const FMP_API_KEY         = process.env.FMP_API_KEY         || "";
+const TIGER_ID            = process.env.TIGER_ID            || "";
+const TIGER_LIVE_ACCOUNT  = process.env.TIGER_LIVE_ACCOUNT  || "";
+const TIGER_PRIVATE_KEY_PATH = process.env.TIGER_PRIVATE_KEY_PATH || "";
+
+// Load Tiger RSA private key (PKCS#8 PEM)
+let TIGER_PRIVATE_KEY = null;
+if (TIGER_ID && TIGER_PRIVATE_KEY_PATH) {
+  try {
+    TIGER_PRIVATE_KEY = require("fs").readFileSync(TIGER_PRIVATE_KEY_PATH, "utf8");
+  } catch (e) {
+    console.error("Tiger: could not read private key:", e.message);
+  }
+}
 
 if (!ANTHROPIC_API_KEY) {
   console.error("❌ ANTHROPIC_API_KEY is not set in .env");
@@ -32,13 +45,65 @@ app.post("/api/analyse", async (req, res) => {
         "x-api-key": ANTHROPIC_API_KEY,
         "anthropic-version": "2023-06-01",
       },
-      body: JSON.stringify(req.body),
+      body: JSON.stringify({ ...req.body, temperature: 0.3 }),
     });
     const data = await response.json();
     res.json(data);
   } catch (err) {
     console.error("Anthropic API error:", err);
     res.status(500).json({ error: "Analysis failed" });
+  }
+});
+
+// ── Streaming analyse proxy (SSE) ────────────────────────────────────────────
+app.post("/api/analyse/stream", async (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  try {
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({ ...req.body, stream: true, temperature: 0.3 }),
+    });
+    if (!response.ok) {
+      const err = await response.text();
+      res.write(`data: ${JSON.stringify({ error: err })}\n\n`);
+      res.end();
+      return;
+    }
+    let buffer = "";
+    await new Promise((resolve, reject) => {
+      response.body.on("data", (chunk) => {
+        buffer += chunk.toString();
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const payload = line.slice(6).trim();
+            if (payload === "[DONE]") continue;
+            try {
+              const evt = JSON.parse(payload);
+              if (evt.type === "content_block_delta" && evt.delta?.text) {
+                res.write(`data: ${JSON.stringify({ t: evt.delta.text })}\n\n`);
+              }
+            } catch {}
+          }
+        }
+      });
+      response.body.on("end", resolve);
+      response.body.on("error", reject);
+    });
+    res.write("data: [DONE]\n\n");
+    res.end();
+  } catch (err) {
+    console.error("Stream error:", err.message);
+    res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
+    res.end();
   }
 });
 
@@ -363,7 +428,16 @@ app.get("/api/binance/usdt-balance", async (req, res) => {
   try {
     const account = await binanceFetch("GET", "/api/v3/account");
     const usdt = (account.balances || []).find(b => b.asset === "USDT");
-    const available = usdt ? parseFloat(usdt.free) : 0;
+    let available = usdt ? parseFloat(usdt.free) : 0;
+    // Also check Funding wallet (deposits land here, not Spot)
+    if (available === 0) {
+      try {
+        const funding = await binanceFetch("POST", "/sapi/v1/asset/get-funding-asset", { asset: "USDT" });
+        if (Array.isArray(funding) && funding.length > 0) {
+          available = parseFloat(funding[0].free || 0);
+        }
+      } catch {}
+    }
     res.json({ available });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -422,6 +496,153 @@ app.get("/api/binance/ticker/:sym", async (req, res) => {
     }
     res.status(404).json({ error: "No price available" });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Tiger Brokers API ─────────────────────────────────────────────────────
+function tigerSign(params) {
+  const sorted = Object.keys(params).sort();
+  const str = sorted.map(k => `${k}=${params[k]}`).join("&");
+  const sign = crypto.createSign("RSA-SHA1");
+  sign.update(str);
+  sign.end();
+  return sign.sign(TIGER_PRIVATE_KEY, "base64");
+}
+
+async function tigerFetch(method, bizContent = {}) {
+  const params = {
+    tiger_id: TIGER_ID,
+    charset: "UTF-8",
+    sign_type: "RSA",
+    version: "1.0",
+    timestamp: new Date().toISOString().replace("T", " ").slice(0, 19),
+    method,
+    biz_content: JSON.stringify(bizContent),
+  };
+  params.sign = tigerSign(params);
+  const r = await fetch("https://openapi.tigerfintech.com/gateway", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  const d = await r.json();
+  if (d.code !== 0) throw new Error(d.message || `Tiger API error code ${d.code}`);
+  return d.data;
+}
+
+app.get("/api/tiger/balances", async (req, res) => {
+  if (!TIGER_ID || !TIGER_PRIVATE_KEY) {
+    return res.status(503).json({ error: "Tiger API not configured — add TIGER_ID and private key to .env" });
+  }
+  try {
+    const data = await tigerFetch("positions", { account: TIGER_LIVE_ACCOUNT, sec_type: "STK" });
+    const items = (data && data.items) || [];
+    const holdings = items.map(p => {
+      const isAU = (p.market || "").toUpperCase() === "AU";
+      const sym = isAU ? `${p.symbol}.AX` : p.symbol;
+      return {
+        sym,
+        name: p.symbol,
+        qty: p.position || 0,
+        avg: p.averageCost || 0,
+        avgCurrency: isAU ? "AUD" : "USD",
+        sector: "Unknown",
+        horizon: "Medium",
+        priceType: "stock",
+        source: "tiger",
+      };
+    });
+    console.log(`Tiger: fetched ${holdings.length} positions`);
+    res.json({ holdings, lastSync: new Date().toISOString() });
+  } catch (err) {
+    console.error("Tiger error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/tiger/assets", async (req, res) => {
+  if (!TIGER_ID || !TIGER_PRIVATE_KEY) {
+    return res.status(503).json({ error: "Tiger API not configured" });
+  }
+  try {
+    const baseCcy = (req.query.currency || "USD").toUpperCase();
+    const raw = await tigerFetch("assets", { account: TIGER_LIVE_ACCOUNT, base_currency: baseCcy });
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    const data = parsed?.items?.[0] || parsed || {};
+    res.json({
+      buyingPower: data.buyingPower ?? data.buying_power ?? 0,
+      cashBalance: data.cashValue ?? data.cashBalance ?? data.cash_balance ?? 0,
+      currency: baseCcy,
+      netLiquidation: data.netLiquidation ?? data.net_liquidation ?? 0,
+    });
+  } catch (err) {
+    console.error("Tiger assets error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/tiger/order", async (req, res) => {
+  if (!TIGER_ID || !TIGER_PRIVATE_KEY) {
+    return res.status(503).json({ error: "Tiger API not configured" });
+  }
+  try {
+    const { sym, side, qty, orderType, limitPrice, livePrice } = req.body;
+    if (!sym || !side || !qty) return res.status(400).json({ error: "sym, side, qty required" });
+
+    const isAX = sym.endsWith(".AX") || sym.endsWith(".AU");
+    const symbol = isAX ? sym.replace(".AX", ".AU") : sym;
+    const currency = isAX ? "AUD" : "USD";
+
+    // ASX requires a limit price — use provided limit or fall back to live price
+    const effectiveOrderType = isAX ? "LMT" : (orderType || "MKT");
+    const effectiveLimitPrice = limitPrice || (isAX ? livePrice : null);
+
+    const bizContent = {
+      account: TIGER_LIVE_ACCOUNT,
+      symbol,
+      currency,
+      sec_type: "STK",
+      action: side,
+      order_type: effectiveOrderType,
+      total_quantity: qty,
+      time_in_force: "DAY",
+    };
+    if (effectiveLimitPrice) {
+      bizContent.limit_price = effectiveLimitPrice;
+    }
+    if (!isAX) {
+      bizContent.outside_rth = true;
+    }
+
+    const data = await tigerFetch("place_order", bizContent);
+    console.log(`Tiger order: ${side} ${qty} ${symbol} →`, data);
+    res.json({ success: true, orderId: data?.id || data?.orderId || "submitted", status: data?.status || "SUBMITTED" });
+  } catch (err) {
+    console.error("Tiger order error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/tiger/orders", async (req, res) => {
+  if (!TIGER_ID || !TIGER_PRIVATE_KEY) {
+    return res.status(503).json({ error: "Tiger API not configured" });
+  }
+  try {
+    const data = await tigerFetch("orders", { account: TIGER_LIVE_ACCOUNT });
+    const parsed = typeof data === "string" ? JSON.parse(data) : data;
+    const items = (parsed && parsed.items) || [];
+    const orders = items.map(o => ({
+      id: o.id, symbol: o.symbol, market: o.market, action: o.action,
+      orderType: o.order_type || o.orderType, status: o.status,
+      qty: o.total_quantity || o.qty, filledQty: o.filled_quantity || o.filledQty || 0,
+      limitPrice: o.limit_price || o.limitPrice, avgFillPrice: o.avg_fill_price || o.avgFillPrice,
+      currency: o.currency, name: o.name || o.symbol,
+      openTime: o.open_time || o.openTime, remark: o.remark,
+    }));
+    res.json({ orders });
+  } catch (err) {
+    console.error("Tiger orders error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -721,7 +942,7 @@ app.get("/api/fundamentals/:sym", async (req, res) => {
 
 // ── Detailed technical analysis with chart annotations ─────────────────────
 app.post("/api/analyse/detail", async (req, res) => {
-  const { sym, name, candles, range, currentPrice, currency, indicators, fundamentals } = req.body;
+  const { sym, name, candles, range, currentPrice, currency, indicators, fundamentals, initialVerdict } = req.body;
   if (!sym || !candles?.length) return res.status(400).json({ error: "sym and candles required" });
 
   const recent = candles.slice(-40);
@@ -803,11 +1024,12 @@ app.post("/api/analyse/detail", async (req, res) => {
       headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
         model: "claude-sonnet-4-20250514",
-        max_tokens: 1500,
+        max_tokens: 1500, temperature: 0.3,
         system: `You are a senior investment analyst. Today is ${new Date().toLocaleDateString("en-AU",{year:"numeric",month:"long",day:"numeric"})}. You have been given live OHLCV chart data for this asset. Using this chart data AND your knowledge of the asset's fundamentals, sector dynamics, macro environment, and market conditions as of today, produce a single unified investment analysis with ONE verdict. Integrate technical signals from the chart with fundamental and macro factors — do not treat them as separate signals. The current live price is the closing price of the most recent candle. Return ONLY valid JSON (no markdown fences):
 {"verdict":"BUY|WATCH|AVOID|HOLD","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","target":"$X","stopLoss":"$X","summary":"2-3 sentences combining all factors","macro":"2-3 sentences","fundamental":"2-3 sentences","technical":"2-3 sentences based on the chart data","sentiment":"2-3 sentences","portfolio":"2-3 sentences","support":[{"price":0.0,"label":"Label","strength":"STRONG|MEDIUM|WEAK"}],"resistance":[{"price":0.0,"label":"Label","strength":"STRONG|MEDIUM|WEAK"}],"pattern":{"name":"Pattern name or null","bullish":true,"note":"1 sentence"},"momentum":"1-2 sentences","volume":"1 sentence"}
 Horizon definitions: Short = up to 3 months; Medium = 3 months to 1 year; Long = 1 year or more.
-Provide 1-3 support and 1-3 resistance levels using actual prices from the data.${fundamentalsBlock}${indicatorsBlock}`,
+Match your horizon to the chart range: 1mo = Short, 3mo = Short, 6mo = Medium, 1y = Medium, 5y = Long.
+Provide 1-3 support and 1-3 resistance levels using actual prices from the data.${initialVerdict ? `\n\nIMPORTANT: The initial analysis gave a verdict of "${initialVerdict}". Your detailed analysis should be consistent with this verdict unless the live chart data and indicators provide strong, clear evidence to the contrary. Do not downgrade a BUY to WATCH simply due to normal uncertainty — only change the verdict if the technical data materially contradicts it.` : ""}${fundamentalsBlock}${indicatorsBlock}`,
         messages: [{ role: "user", content: `Symbol: ${sym} (${name})\nCurrent: ${currentPrice} ${currency} | Range: ${range} | Change: ${chgPct}%\nPrice range: ${minP?.toFixed(2)} – ${maxP?.toFixed(2)}\n\nOHLCV (i=candle index, vR=vol vs avg):\n${JSON.stringify(summary)}` }],
       })
     });
@@ -950,19 +1172,82 @@ app.get("/api/dashboard/picks", async (req, res) => {
     const today = new Date().toLocaleDateString("en-AU", {
       weekday: "long", day: "numeric", month: "long", year: "numeric"
     });
+
+    // ── Fetch live market context in parallel ──
+    const [newsCtx, benchCtx, cryptoCtx] = await Promise.allSettled([
+      // Recent news headlines
+      (async () => {
+        if (newsCache.items.length && now - newsCache.ts < 15 * 60 * 1000) return newsCache.items;
+        const feeds = [
+          "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EGSPC,NVDA,MSFT,AAPL,AMD&region=US&lang=en-US",
+          "https://feeds.finance.yahoo.com/rss/2.0/headline?s=BTC-USD,ETH-USD,SOL-USD&region=US&lang=en-US",
+          "https://feeds.finance.yahoo.com/rss/2.0/headline?s=BHP.AX,RIO.AX,PLS.AX,FMG.AX&region=AU&lang=en-AU",
+        ];
+        const results = await Promise.allSettled(feeds.map(u => fetch(u, { headers: { "User-Agent": "Mozilla/5.0" } }).then(r => r.text())));
+        const items = [];
+        for (const r of results) {
+          if (r.status !== "fulfilled") continue;
+          const matches = [...r.value.matchAll(/<item>[\s\S]*?<title><!\[CDATA\[(.*?)\]\]><\/title>[\s\S]*?<\/item>/g)];
+          matches.forEach(m => items.push(m[1]));
+        }
+        return items.slice(0, 12);
+      })(),
+      // Benchmark performance
+      (async () => {
+        const fetchIdx = async (sym) => {
+          const r = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=1mo`, { headers: { "User-Agent": "Mozilla/5.0" } });
+          const d = await r.json();
+          const closes = (d?.chart?.result?.[0]?.indicators?.quote?.[0]?.close || []).filter(c => c != null);
+          if (closes.length < 2) return null;
+          const last = closes[closes.length - 1];
+          return { price: last.toFixed(0), change1d: ((last / closes[closes.length - 2] - 1) * 100).toFixed(2), change1w: ((last / closes[Math.max(0, closes.length - 6)] - 1) * 100).toFixed(2), change1m: ((last / closes[0] - 1) * 100).toFixed(2) };
+        };
+        const [sp, ax] = await Promise.all([fetchIdx("^GSPC"), fetchIdx("^AXJO")]);
+        return { sp500: sp, asx200: ax };
+      })(),
+      // Top crypto prices
+      (async () => {
+        const r = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=usd&include_24hr_change=true");
+        const d = await r.json();
+        return Object.entries(d).map(([k, v]) => `${k}: $${v.usd.toLocaleString()} (${v.usd_24h_change >= 0 ? "+" : ""}${v.usd_24h_change.toFixed(1)}% 24h)`).join(", ");
+      })(),
+    ]);
+
+    const newsHeadlines = newsCtx.status === "fulfilled" && newsCtx.value.length > 0
+      ? `\n\nLIVE NEWS HEADLINES (last few hours):\n${(Array.isArray(newsCtx.value[0]) ? newsCtx.value : newsCtx.value).map((h, i) => `${i + 1}. ${typeof h === "string" ? h : h.headline || h}`).join("\n")}`
+      : "";
+
+    const benchmarks = benchCtx.status === "fulfilled" && benchCtx.value
+      ? `\n\nMARKET BENCHMARKS:\n${benchCtx.value.sp500 ? `S&P 500: ${benchCtx.value.sp500.price} (1D: ${benchCtx.value.sp500.change1d}%, 1W: ${benchCtx.value.sp500.change1w}%, 1M: ${benchCtx.value.sp500.change1m}%)` : ""}${benchCtx.value.asx200 ? `\nASX 200: ${benchCtx.value.asx200.price} (1D: ${benchCtx.value.asx200.change1d}%, 1W: ${benchCtx.value.asx200.change1w}%, 1M: ${benchCtx.value.asx200.change1m}%)` : ""}`
+      : "";
+
+    const cryptoPrices = cryptoCtx.status === "fulfilled"
+      ? `\n\nCRYPTO PRICES: ${cryptoCtx.value}`
+      : "";
+
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
         model: "claude-sonnet-4-20250514",
-        max_tokens: 3000,
+        max_tokens: 3000, temperature: 0.3,
         system: `You are a senior investment analyst generating today's top picks. Today is ${today}.
-Generate 3 high-conviction investment picks — aim for variety across asset classes (e.g. US large-cap stock, ASX stock or ETF, crypto). Pick what is genuinely interesting given current market conditions as of today's date.
+${benchmarks}${cryptoPrices}${newsHeadlines}
+
+TASK: Generate 3 high-conviction investment picks grounded in the LIVE DATA above. At least 2 must be BUY. Aim for variety across asset classes (e.g. US large-cap, ASX stock, crypto).
+
+CRITICAL RULES:
+- Every pick MUST cite a specific catalyst from the news, market data, or a verifiable recent event. No generic "looks undervalued" picks.
+- Reference actual prices and percentage moves from the data above. Your analysis must be anchored in TODAY's market conditions.
+- Be aggressive — this user wants actionable BUY opportunities, not cautious hedging.
+- ASX tickers must end in .AX. Use standard crypto symbols (BTC, ETH, SOL etc).
+- For priceStatic use your best estimate of the current price based on the data above.
+
+Horizon definitions: Short = up to 3 months; Medium = 3 months to 1 year; Long = 1 year or more.
+
 Respond ONLY with a valid JSON array, no markdown fences. Each pick must use this exact structure:
-[{"sym":"TICKER","name":"Full Company Name","sector":"Sector","verdict":"BUY|WATCH|AVOID|HOLD","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","priceStatic":0.00,"target":"$X","upside":"+X%","up":true,"priceType":"stock or crypto","priceCurrency":"USD or AUD","avgCurrency":"USD or AUD","summary":"2-3 sentences on the core thesis.","macro":"2-3 sentences on macro tailwinds or headwinds.","fundamental":"2-3 sentences on key fundamental metrics.","technical":"2-3 sentences on technical setup.","sentiment":"2-3 sentences on analyst and market sentiment.","insider":"2-3 sentences on insider activity or institutional flows.","portfolio":"1-2 sentences on portfolio fit and sizing."}]
-Rules: ASX tickers must end in .AX. Use standard crypto symbols (BTC, ETH, SOL etc). For priceStatic use your best estimate of the current price. Be direct and specific — avoid generic statements.
-Horizon definitions: Short = up to 3 months; Medium = 3 months to 1 year; Long = 1 year or more.`,
-        messages: [{ role: "user", content: "Generate today's 3 top investment picks with full analysis." }],
+[{"sym":"TICKER","name":"Full Company Name","sector":"Sector","verdict":"BUY|WATCH","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","priceStatic":0.00,"target":"$X","upside":"+X%","up":true,"priceType":"stock or crypto","priceCurrency":"USD or AUD","avgCurrency":"USD or AUD","summary":"2-3 sentences on the core thesis referencing specific catalyst.","macro":"2-3 sentences on macro tailwinds/headwinds with data.","fundamental":"2-3 sentences on key metrics.","technical":"2-3 sentences on technical setup with price levels.","sentiment":"2-3 sentences on current market sentiment.","insider":"2-3 sentences on institutional activity.","portfolio":"1-2 sentences on sizing."}]`,
+        messages: [{ role: "user", content: "Generate today's 3 top investment picks. Ground every pick in the live market data provided. Be specific and aggressive." }],
       }),
     });
     const d = await response.json();
@@ -972,14 +1257,15 @@ Horizon definitions: Short = up to 3 months; Medium = 3 months to 1 year; Long =
     if (start === -1 || end === -1) throw new Error("No JSON array found in response");
     const parsed = JSON.parse(text.slice(start, end + 1));
     if (!Array.isArray(parsed) || parsed.length === 0) throw new Error("Invalid response format");
-    // Fetch live prices and replace Claude's priceStatic estimates
+    // Fetch live prices and replace Claude's priceStatic estimates (null on failure — never keep Claude's guess)
     await Promise.allSettled(parsed.map(async pick => {
       try {
         const result = pick.priceType === "crypto"
           ? await fetchCryptoPrice(pick.sym)
           : await fetchStockPrice(pick.sym);
-        if (result?.price) pick.priceStatic = result.price;
-      } catch {}
+        if (result?.price) { pick.priceStatic = result.price; pick.priceCurrency = result.currency || pick.priceCurrency; }
+        else { pick.priceStatic = null; }
+      } catch { pick.priceStatic = null; }
     }));
     dashCache = { picks: parsed, ts: now };
     console.log(`Dashboard: generated ${parsed.length} picks`);
@@ -987,6 +1273,164 @@ Horizon definitions: Short = up to 3 months; Medium = 3 months to 1 year; Long =
   } catch (err) {
     console.error("Dashboard picks error:", err.message);
     res.status(500).json({ error: "Could not generate picks — " + err.message });
+  }
+});
+
+
+// ── Dashboard picks (streaming) ─────────────────────────────────────────────
+app.get("/api/dashboard/picks/stream", async (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+
+  const now = Date.now();
+  const force = req.query.force === "1";
+  if (!force && dashCache.picks && now - dashCache.ts < 4 * 60 * 60 * 1000) {
+    send({ status: "done", picks: dashCache.picks });
+    res.write("data: [DONE]\n\n");
+    return res.end();
+  }
+  try {
+    send({ status: "Fetching live market data..." });
+    const today = new Date().toLocaleDateString("en-AU", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+
+    const [newsCtx, benchCtx, cryptoCtx] = await Promise.allSettled([
+      (async () => {
+        if (newsCache.items.length && now - newsCache.ts < 15 * 60 * 1000) return newsCache.items;
+        const feeds = [
+          "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EGSPC,NVDA,MSFT,AAPL,AMD&region=US&lang=en-US",
+          "https://feeds.finance.yahoo.com/rss/2.0/headline?s=BTC-USD,ETH-USD,SOL-USD&region=US&lang=en-US",
+          "https://feeds.finance.yahoo.com/rss/2.0/headline?s=BHP.AX,RIO.AX,PLS.AX,FMG.AX&region=AU&lang=en-AU",
+        ];
+        const results = await Promise.allSettled(feeds.map(u => fetch(u, { headers: { "User-Agent": "Mozilla/5.0" } }).then(r => r.text())));
+        const items = [];
+        for (const r of results) {
+          if (r.status !== "fulfilled") continue;
+          const matches = [...r.value.matchAll(/<item>[\s\S]*?<title><!\[CDATA\[(.*?)\]\]><\/title>[\s\S]*?<\/item>/g)];
+          matches.forEach(m => items.push(m[1]));
+        }
+        return items.slice(0, 12);
+      })(),
+      (async () => {
+        const fetchIdx = async (sym) => {
+          const r = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=1mo`, { headers: { "User-Agent": "Mozilla/5.0" } });
+          const d = await r.json();
+          const closes = (d?.chart?.result?.[0]?.indicators?.quote?.[0]?.close || []).filter(c => c != null);
+          if (closes.length < 2) return null;
+          const last = closes[closes.length - 1];
+          return { price: last.toFixed(0), change1d: ((last / closes[closes.length - 2] - 1) * 100).toFixed(2), change1w: ((last / closes[Math.max(0, closes.length - 6)] - 1) * 100).toFixed(2), change1m: ((last / closes[0] - 1) * 100).toFixed(2) };
+        };
+        const [sp, ax] = await Promise.all([fetchIdx("^GSPC"), fetchIdx("^AXJO")]);
+        return { sp500: sp, asx200: ax };
+      })(),
+      (async () => {
+        const r = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=usd&include_24hr_change=true");
+        const d = await r.json();
+        return Object.entries(d).map(([k, v]) => `${k}: $${v.usd.toLocaleString()} (${v.usd_24h_change >= 0 ? "+" : ""}${v.usd_24h_change.toFixed(1)}% 24h)`).join(", ");
+      })(),
+    ]);
+
+    send({ status: "Scanning news and benchmarks..." });
+
+    const newsHeadlines = newsCtx.status === "fulfilled" && newsCtx.value.length > 0
+      ? `\n\nLIVE NEWS HEADLINES (last few hours):\n${(Array.isArray(newsCtx.value[0]) ? newsCtx.value : newsCtx.value).map((h, i) => `${i + 1}. ${typeof h === "string" ? h : h.headline || h}`).join("\n")}`
+      : "";
+    const benchmarks = benchCtx.status === "fulfilled" && benchCtx.value
+      ? `\n\nMARKET BENCHMARKS:\n${benchCtx.value.sp500 ? `S&P 500: ${benchCtx.value.sp500.price} (1D: ${benchCtx.value.sp500.change1d}%, 1W: ${benchCtx.value.sp500.change1w}%, 1M: ${benchCtx.value.sp500.change1m}%)` : ""}${benchCtx.value.asx200 ? `\nASX 200: ${benchCtx.value.asx200.price} (1D: ${benchCtx.value.asx200.change1d}%, 1W: ${benchCtx.value.asx200.change1w}%, 1M: ${benchCtx.value.asx200.change1m}%)` : ""}`
+      : "";
+    const cryptoPrices = cryptoCtx.status === "fulfilled" ? `\n\nCRYPTO PRICES: ${cryptoCtx.value}` : "";
+
+    send({ status: "Analysing pick 1 of 3..." });
+
+    const sysPrompt = `You are a senior investment analyst generating today's top picks. Today is ${today}.
+${benchmarks}${cryptoPrices}${newsHeadlines}
+
+TASK: Generate 3 high-conviction investment picks grounded in the LIVE DATA above. At least 2 must be BUY. Aim for variety across asset classes (e.g. US large-cap, ASX stock, crypto).
+
+CRITICAL RULES:
+- Every pick MUST cite a specific catalyst from the news, market data, or a verifiable recent event. No generic "looks undervalued" picks.
+- Reference actual prices and percentage moves from the data above. Your analysis must be anchored in TODAY's market conditions.
+- Be aggressive — this user wants actionable BUY opportunities, not cautious hedging.
+- ASX tickers must end in .AX. Use standard crypto symbols (BTC, ETH, SOL etc).
+- For priceStatic use your best estimate of the current price based on the data above.
+
+Horizon definitions: Short = up to 3 months; Medium = 3 months to 1 year; Long = 1 year or more.
+
+Respond ONLY with a valid JSON array, no markdown fences. Each pick must use this exact structure:
+[{"sym":"TICKER","name":"Full Company Name","sector":"Sector","verdict":"BUY|WATCH","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","priceStatic":0.00,"target":"$X","upside":"+X%","up":true,"priceType":"stock or crypto","priceCurrency":"USD or AUD","avgCurrency":"USD or AUD","summary":"2-3 sentences on the core thesis referencing specific catalyst.","macro":"2-3 sentences on macro tailwinds/headwinds with data.","fundamental":"2-3 sentences on key metrics.","technical":"2-3 sentences on technical setup with price levels.","sentiment":"2-3 sentences on current market sentiment.","insider":"2-3 sentences on institutional activity.","portfolio":"1-2 sentences on sizing."}]`;
+
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514", max_tokens: 3000, stream: true, temperature: 0.3,
+        system: sysPrompt,
+        messages: [{ role: "user", content: "Generate today's 3 top investment picks. Ground every pick in the live market data provided. Be specific and aggressive." }],
+      }),
+    });
+
+    // Stream the Claude response, track pick boundaries via "},{" to update status
+    let fullText = "";
+    let pickCount = 0;
+    let streamBuf = "";
+    await new Promise((resolve, reject) => {
+      response.body.on("data", (chunk) => {
+        streamBuf += chunk.toString();
+        const lines = streamBuf.split("\n");
+        streamBuf = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const payload = line.slice(6).trim();
+          if (payload === "[DONE]") continue;
+          try {
+            const evt = JSON.parse(payload);
+            if (evt.type === "content_block_delta" && evt.delta?.text) {
+              fullText += evt.delta.text;
+              // Count completed picks by tracking closing braces
+              const newCount = (fullText.match(/\}\s*,\s*\{/g) || []).length + (fullText.trim().endsWith("}]") ? 1 : 0);
+              if (newCount > pickCount) {
+                pickCount = newCount;
+                if (pickCount < 3) send({ status: `Analysing pick ${pickCount + 1} of 3...` });
+                else send({ status: "Finalising picks..." });
+              }
+            }
+          } catch {}
+        }
+      });
+      response.body.on("end", resolve);
+      response.body.on("error", reject);
+    });
+
+    const text = fullText;
+    const start = text.indexOf("[");
+    const end   = text.lastIndexOf("]");
+    if (start === -1 || end === -1) throw new Error("No JSON array found in response");
+    const parsed = JSON.parse(text.slice(start, end + 1));
+    if (!Array.isArray(parsed) || parsed.length === 0) throw new Error("Invalid response format");
+
+    send({ status: "Fetching live prices..." });
+
+    await Promise.allSettled(parsed.map(async pick => {
+      try {
+        const result = pick.priceType === "crypto"
+          ? await fetchCryptoPrice(pick.sym)
+          : await fetchStockPrice(pick.sym);
+        if (result?.price) { pick.priceStatic = result.price; pick.priceCurrency = result.currency || pick.priceCurrency; }
+        else { pick.priceStatic = null; }
+      } catch { pick.priceStatic = null; }
+    }));
+
+    dashCache = { picks: parsed, ts: now };
+    console.log(`Dashboard: generated ${parsed.length} picks (streamed)`);
+    send({ status: "done", picks: parsed });
+    res.write("data: [DONE]\n\n");
+    res.end();
+  } catch (err) {
+    console.error("Dashboard picks stream error:", err.message);
+    send({ error: "Could not generate picks — " + err.message });
+    res.write("data: [DONE]\n\n");
+    res.end();
   }
 });
 
@@ -1001,7 +1445,7 @@ app.post("/api/glossary/extract", async (req, res) => {
       headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
         model: "claude-haiku-4-5-20251001",
-        max_tokens: 1200,
+        max_tokens: 1200, temperature: 0.3,
         system: `You are a financial glossary extractor. Given investment analysis text, identify technical terms related to stocks, crypto, finance, economics, or trading that a retail investor might not know. Return ONLY a valid JSON array (no markdown) of new terms not in common knowledge. Each item: {"term":"Term","definition":"Clear 1-2 sentence definition for a retail investor."}. Return [] if no new terms found. Limit to 8 terms maximum.`,
         messages: [{ role: "user", content: `Extract financial/investment terms from this text:\n\n${text.slice(0, 3000)}` }],
       }),
@@ -1033,7 +1477,7 @@ app.post("/api/journal/analyse", async (req, res) => {
       method: "POST",
       headers: { "Content-Type":"application/json", "x-api-key":ANTHROPIC_API_KEY, "anthropic-version":"2023-06-01" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514", max_tokens: 1500,
+        model: "claude-haiku-4-5-20251001", max_tokens: 1500, temperature: 0.3,
         system: `You are a trading coach specialising in behavioural finance. Today is ${today}. Analyse this trade journal for patterns and provide honest, direct coaching. Focus on behavioural patterns not just performance. Return ONLY valid JSON:
 {"summary":"2-3 sentences overall assessment","patterns":[{"pattern":"Name of behavioural pattern","description":"1-2 sentences explaining the pattern with specific examples from the journal","severity":"HIGH|MEDIUM|LOW","advice":"Specific actionable advice to address this"}],"strengths":["short string"],"weaknesses":["short string"],"winRate":"X% (N/N trades)" or null,"avgHoldDays":number or null,"topMistake":"1 sentence on the single biggest mistake","keyAdvice":"The most important piece of advice in 1-2 sentences"}`,
         messages: [{ role:"user", content: `Analyse my trade journal (${entries.length} entries):\n\n${lines.join("\n")}` }],
@@ -1069,7 +1513,7 @@ app.post("/api/macro", async (req, res) => {
       method: "POST",
       headers: { "Content-Type":"application/json", "x-api-key":ANTHROPIC_API_KEY, "anthropic-version":"2023-06-01" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514", max_tokens: 2500,
+        model: "claude-haiku-4-5-20251001", max_tokens: 2500, temperature: 0.3,
         system: `You are a macro economist. Today is ${today}. Generate the upcoming macro events for the next 6 weeks that matter to investors. Include central bank meetings, major economic data releases (CPI, jobs, GDP, PMI), and any known scheduled events. For each event, assess the portfolio impact for these holdings: ${holdings}. Return ONLY valid JSON array (no markdown):
 [{"date":"YYYY-MM-DD","event":"Event name","category":"FED|RBA|ECB|INFLATION|EMPLOYMENT|GROWTH|TRADE|OTHER","country":"US|AU|EU|CN|GLOBAL","importance":"HIGH|MEDIUM|LOW","preview":"1 sentence on what to expect","portfolioImpact":"1-2 sentences on how this affects the specific holdings listed — be specific about which holdings are most affected","bullCase":"If outcome beats expectations: 1 sentence","bearCase":"If outcome misses: 1 sentence","affectedHoldings":["SYM1","SYM2"]}]
 Return 8–14 events. Sort by date ascending. Only include events you are confident will occur around this time — do not invent speculative events.`,
@@ -1100,7 +1544,7 @@ app.post("/api/screener", async (req, res) => {
       method: "POST",
       headers: { "Content-Type":"application/json", "x-api-key":ANTHROPIC_API_KEY, "anthropic-version":"2023-06-01" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514", max_tokens: 2000,
+        model: "claude-sonnet-4-20250514", max_tokens: 2000, temperature: 0.3,
         system: `You are a senior investment analyst running a stock screener. Today is ${today}. The user has described what they are looking for in plain English. Return 5–7 stocks that best match their criteria as of today. Be specific and current — pick stocks that genuinely fit right now, not generic examples. ASX tickers must end in .AX. Return ONLY a valid JSON array with no markdown, no preamble, no explanation — just the raw JSON array:
 [{"sym":"TICKER","name":"Full Company Name","sector":"Sector","verdict":"BUY|WATCH|AVOID|HOLD","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","priceStatic":0.00,"target":"$X","upside":"+X%","up":true,"priceType":"stock or crypto","priceCurrency":"USD or AUD","avgCurrency":"USD or AUD","matchReason":"2-3 sentences on exactly why this matches the screen criteria","summary":"2-3 sentences on the investment thesis"}]
 Horizon definitions: Short = up to 3 months; Medium = 3 months to 1 year; Long = 1 year or more.`,
@@ -1119,6 +1563,16 @@ Horizon definitions: Short = up to 3 months; Medium = 3 months to 1 year; Long =
     if (start === -1 || end === -1) throw new Error("No JSON array in response");
     const parsed = JSON.parse(text.slice(start, end + 1));
     if (!Array.isArray(parsed)) throw new Error("Invalid response");
+    // Fetch live prices and replace Claude's estimates (same as dashboard picks)
+    await Promise.allSettled(parsed.map(async pick => {
+      try {
+        const result = pick.priceType === "crypto"
+          ? await fetchCryptoPrice(pick.sym)
+          : await fetchStockPrice(pick.sym);
+        if (result?.price) { pick.priceStatic = result.price; pick.priceCurrency = result.currency || pick.priceCurrency; }
+        else { pick.priceStatic = null; }
+      } catch { pick.priceStatic = null; }
+    }));
     res.json(parsed);
   } catch (err) {
     console.error("Screener error:", err.message);
@@ -1437,7 +1891,7 @@ app.post("/api/portfolio/coach", async (req, res) => {
       method: "POST",
       headers: { "Content-Type":"application/json", "x-api-key":ANTHROPIC_API_KEY, "anthropic-version":"2023-06-01" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514", max_tokens: 2000,
+        model: "claude-sonnet-4-20250514", max_tokens: 2000, temperature: 0.3,
         system: `You are a senior portfolio strategist. Today is ${today}. Analyse this portfolio and provide honest, actionable coaching. Be specific — name actual positions. Return ONLY valid JSON (no markdown fences):
 {"grade":"A|B|C|D|F","gradeNote":"One sentence justifying the grade","summary":"2-3 sentences overall portfolio assessment","concentration":"2-3 sentences naming specific over-weight positions","diversification":"2-3 sentences on diversification quality","riskProfile":"AGGRESSIVE|BALANCED|CONSERVATIVE","riskNote":"1-2 sentences","strengths":["up to 3 short strength strings"],"weaknesses":["up to 3 short weakness strings"],"actions":[{"priority":"HIGH|MEDIUM|LOW","action":"Specific action to take","reason":"Why this matters"}],"sectorComment":"1-2 sentences on sector allocation","cryptoComment":"1-2 sentences on crypto allocation — omit key if no crypto","outlook":"1-2 sentences on portfolio outlook given current market conditions"}
 Provide 2-4 specific, concrete actions.`,
@@ -1512,6 +1966,7 @@ app.get("/health", (_, res) => res.json({
   anthropic: !!ANTHROPIC_API_KEY,
   coinbase:  !!(COINBASE_API_KEY && COINBASE_API_SECRET),
   binance:   !!(BINANCE_API_KEY && BINANCE_API_SECRET),
+  tiger:     !!(TIGER_ID && TIGER_PRIVATE_KEY),
   finnhub:   !!FINNHUB_API_KEY,
   fmp:       !!FMP_API_KEY,
   ipo:       !!FINNHUB_API_KEY,
@@ -1522,6 +1977,7 @@ app.listen(PORT, () => {
   console.log(`   Anthropic: ${ANTHROPIC_API_KEY ? "✓" : "✗ missing"}`);
   console.log(`   Coinbase:  ${COINBASE_API_KEY  ? "✓" : "✗ not configured"}`);
   console.log(`   Binance:   ${BINANCE_API_KEY   ? "✓" : "✗ not configured"}`);
+  console.log(`   Tiger:     ${TIGER_ID && TIGER_PRIVATE_KEY ? "✓" : "✗ not configured"}`);
   console.log(`   Finnhub:   ${FINNHUB_API_KEY   ? "✓" : "✗ optional"}`);
   console.log(`   FMP:       ${FMP_API_KEY        ? "✓" : "✗ not configured (fundamentals disabled)"}`);
 });
