@@ -153,6 +153,7 @@ const PORT_TABS = [
   { id:"all",      label:"All",        color:"var(--text2)" },
   { id:"coinbase", label:"Coinbase",   color:"var(--amber)" },
   { id:"binance",  label:"Binance",    color:"#F0B90B" },
+  { id:"tiger",    label:"Tiger",      color:"#FF6600" },
   { id:"ledger",   label:"Ledger",     color:"#41a5f5"      },
   { id:"cmc",      label:"CMC Invest", color:"var(--blue)"  },
 ];
@@ -2311,6 +2312,11 @@ export default function App() {
   const [bnLastSync,setBnL]= useState(null);
   const [bnError,setBnE]   = useState("");
 
+  const [tigerHoldings,setTiger] = useState([]);
+  const [tigerSyncing,setTigerS] = useState(false);
+  const [tigerLastSync,setTigerL]= useState(null);
+  const [tigerError,setTigerE]   = useState("");
+
   const [ledgerAddrs, setLedgerAddrs] = useState(() => {
     try { return JSON.parse(localStorage.getItem("inteliq_ledger_addrs") || "[]"); } catch { return []; }
   });
@@ -2508,7 +2514,7 @@ export default function App() {
   }, [ledgerAddrs]);
 
   // Sync exchanges on mount
-  useEffect(() => { syncCoinbase(); syncBinance(); syncLedger(); }, []);
+  useEffect(() => { syncCoinbase(); syncBinance(); syncTiger(); syncLedger(); }, []);
 
   // Fetch dashboard picks on mount
   useEffect(() => { fetchDashPicks(); }, []);
@@ -2538,6 +2544,15 @@ export default function App() {
       if (d.error) setBnE(d.error); else { setBn(d.holdings||[]); setBnL(nowTime()); }
     } catch { setBnE("Could not connect — check BINANCE_API_KEY and BINANCE_API_SECRET in .env"); }
     setBnS(false);
+  }
+
+  async function syncTiger() {
+    setTigerS(true); setTigerE("");
+    try {
+      const r = await fetch("/api/tiger/balances"); const d = await r.json();
+      if (d.error) setTigerE(d.error); else { setTiger(d.holdings||[]); setTigerL(nowTime()); }
+    } catch { setTigerE("Could not connect — check Tiger API config in .env"); }
+    setTigerS(false);
   }
 
   async function syncLedger() {
@@ -2629,7 +2644,7 @@ export default function App() {
       .finally(() => setCallsPriceFetching(false));
   }, [tab]);
 
-  const allHoldings = [...cbHoldings,...bnHoldings,...ldgHoldings,...cmcHoldings];
+  const allHoldings = [...cbHoldings,...bnHoldings,...tigerHoldings,...ldgHoldings,...cmcHoldings];
 
   useEffect(() => {
     if (tab !== "coach" || allHoldings.length === 0) return;
@@ -3349,7 +3364,7 @@ export default function App() {
 
               <div className="fu2" style={{display:"flex",gap:6,marginBottom:24,flexWrap:"wrap"}}>
                 {PORT_TABS.map(t=>{
-                  const count=t.id==="all"?allHoldings.length:t.id==="coinbase"?cbHoldings.length:t.id==="binance"?bnHoldings.length:t.id==="ledger"?ldgHoldings.length:cmcHoldings.length;
+                  const count=t.id==="all"?allHoldings.length:t.id==="coinbase"?cbHoldings.length:t.id==="binance"?bnHoldings.length:t.id==="tiger"?tigerHoldings.length:t.id==="ledger"?ldgHoldings.length:cmcHoldings.length;
                   const isActive=portTab===t.id;
                   return (
                     <button key={t.id} onClick={()=>setPortTab(t.id)} style={{background:isActive?`${t.color}18`:"none",border:`1px solid ${isActive?`${t.color}50`:"var(--border)"}`,borderRadius:10,padding:"8px 20px",fontSize:12,fontWeight:isActive?600:400,color:isActive?t.color:"var(--muted2)"}}>
@@ -3412,6 +3427,10 @@ export default function App() {
 
               {portTab==="binance"&&(
                 <SourcePanel label="Binance" color="#F0B90B" holdings={bnHoldings} livePrices={livePrices} syncing={bnSyncing} lastSync={bnLastSync} error={bnError} onSync={syncBinance} onRemove={sym=>setBn(p=>p.filter(h=>h.sym!==sym))} onViewChart={h=>openDetail({sym:h.sym,name:h.name,priceType:h.priceType,priceCurrency:h.priceCurrency||"USD",sector:h.sector})} onTrade={cfg=>setTradeModal({...cfg,exchange:"binance"})} displayCcy={displayCcy} audUsd={audUsd}/>
+              )}
+
+              {portTab==="tiger"&&(
+                <SourcePanel label="Tiger" color="#FF6600" holdings={tigerHoldings} livePrices={livePrices} syncing={tigerSyncing} lastSync={tigerLastSync} error={tigerError} onSync={syncTiger} onRemove={sym=>setTiger(p=>p.filter(h=>h.sym!==sym))} onViewChart={h=>openDetail({sym:h.sym,name:h.name,priceType:h.priceType,priceCurrency:h.priceCurrency||h.avgCurrency||"AUD",sector:h.sector})} displayCcy={displayCcy} audUsd={audUsd}/>
               )}
 
               {portTab==="ledger"&&(

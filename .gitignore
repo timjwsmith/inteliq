@@ -19,5 +19,8 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Private keys — NEVER commit
+*.pem
+
 # Docker
 .dockerignore

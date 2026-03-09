@@ -16,6 +16,19 @@ const BINANCE_API_KEY    = process.env.BINANCE_API_KEY    || "";
 const BINANCE_API_SECRET = process.env.BINANCE_API_SECRET || "";
 const FINNHUB_API_KEY     = process.env.FINNHUB_API_KEY     || "";
 const FMP_API_KEY         = process.env.FMP_API_KEY         || "";
+const TIGER_ID            = process.env.TIGER_ID            || "";
+const TIGER_LIVE_ACCOUNT  = process.env.TIGER_LIVE_ACCOUNT  || "";
+const TIGER_PRIVATE_KEY_PATH = process.env.TIGER_PRIVATE_KEY_PATH || "";
+
+// Load Tiger RSA private key (PKCS#8 PEM)
+let TIGER_PRIVATE_KEY = null;
+if (TIGER_ID && TIGER_PRIVATE_KEY_PATH) {
+  try {
+    TIGER_PRIVATE_KEY = require("fs").readFileSync(TIGER_PRIVATE_KEY_PATH, "utf8");
+  } catch (e) {
+    console.error("Tiger: could not read private key:", e.message);
+  }
+}
 
 if (!ANTHROPIC_API_KEY) {
   console.error("❌ ANTHROPIC_API_KEY is not set in .env");
@@ -483,6 +496,67 @@ app.get("/api/binance/ticker/:sym", async (req, res) => {
     }
     res.status(404).json({ error: "No price available" });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Tiger Brokers API ─────────────────────────────────────────────────────
+function tigerSign(params) {
+  const sorted = Object.keys(params).sort();
+  const str = sorted.map(k => `${k}=${params[k]}`).join("&");
+  const sign = crypto.createSign("RSA-SHA1");
+  sign.update(str);
+  sign.end();
+  return sign.sign(TIGER_PRIVATE_KEY, "base64");
+}
+
+async function tigerFetch(method, bizContent = {}) {
+  const params = {
+    tiger_id: TIGER_ID,
+    charset: "UTF-8",
+    sign_type: "RSA",
+    version: "1.0",
+    timestamp: new Date().toISOString().replace("T", " ").slice(0, 19),
+    method,
+    biz_content: JSON.stringify(bizContent),
+  };
+  params.sign = tigerSign(params);
+  const r = await fetch("https://openapi.tigerfintech.com/gateway", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  const d = await r.json();
+  if (d.code !== 0) throw new Error(d.message || `Tiger API error code ${d.code}`);
+  return d.data;
+}
+
+app.get("/api/tiger/balances", async (req, res) => {
+  if (!TIGER_ID || !TIGER_PRIVATE_KEY) {
+    return res.status(503).json({ error: "Tiger API not configured — add TIGER_ID and private key to .env" });
+  }
+  try {
+    const data = await tigerFetch("positions", { account: TIGER_LIVE_ACCOUNT, sec_type: "STK" });
+    const items = (data && data.items) || [];
+    const holdings = items.map(p => {
+      const isAU = (p.market || "").toUpperCase() === "AU";
+      const sym = isAU ? `${p.symbol}.AX` : p.symbol;
+      return {
+        sym,
+        name: p.symbol,
+        qty: p.position || 0,
+        avg: p.averageCost || 0,
+        avgCurrency: isAU ? "AUD" : "USD",
+        sector: "Unknown",
+        horizon: "Medium",
+        priceType: "stock",
+        source: "tiger",
+      };
+    });
+    console.log(`Tiger: fetched ${holdings.length} positions`);
+    res.json({ holdings, lastSync: new Date().toISOString() });
+  } catch (err) {
+    console.error("Tiger error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1806,6 +1880,7 @@ app.get("/health", (_, res) => res.json({
   anthropic: !!ANTHROPIC_API_KEY,
   coinbase:  !!(COINBASE_API_KEY && COINBASE_API_SECRET),
   binance:   !!(BINANCE_API_KEY && BINANCE_API_SECRET),
+  tiger:     !!(TIGER_ID && TIGER_PRIVATE_KEY),
   finnhub:   !!FINNHUB_API_KEY,
   fmp:       !!FMP_API_KEY,
   ipo:       !!FINNHUB_API_KEY,
@@ -1816,6 +1891,7 @@ app.listen(PORT, () => {
   console.log(`   Anthropic: ${ANTHROPIC_API_KEY ? "✓" : "✗ missing"}`);
   console.log(`   Coinbase:  ${COINBASE_API_KEY  ? "✓" : "✗ not configured"}`);
   console.log(`   Binance:   ${BINANCE_API_KEY   ? "✓" : "✗ not configured"}`);
+  console.log(`   Tiger:     ${TIGER_ID && TIGER_PRIVATE_KEY ? "✓" : "✗ not configured"}`);
   console.log(`   Finnhub:   ${FINNHUB_API_KEY   ? "✓" : "✗ optional"}`);
   console.log(`   FMP:       ${FMP_API_KEY        ? "✓" : "✗ not configured (fundamentals disabled)"}`);
 });
