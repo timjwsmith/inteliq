@@ -45,7 +45,7 @@ app.post("/api/analyse", async (req, res) => {
         "x-api-key": ANTHROPIC_API_KEY,
         "anthropic-version": "2023-06-01",
       },
-      body: JSON.stringify(req.body),
+      body: JSON.stringify({ ...req.body, temperature: 0.3 }),
     });
     const data = await response.json();
     res.json(data);
@@ -68,7 +68,7 @@ app.post("/api/analyse/stream", async (req, res) => {
         "x-api-key": ANTHROPIC_API_KEY,
         "anthropic-version": "2023-06-01",
       },
-      body: JSON.stringify({ ...req.body, stream: true }),
+      body: JSON.stringify({ ...req.body, stream: true, temperature: 0.3 }),
     });
     if (!response.ok) {
       const err = await response.text();
@@ -561,6 +561,92 @@ app.get("/api/tiger/balances", async (req, res) => {
   }
 });
 
+app.get("/api/tiger/assets", async (req, res) => {
+  if (!TIGER_ID || !TIGER_PRIVATE_KEY) {
+    return res.status(503).json({ error: "Tiger API not configured" });
+  }
+  try {
+    const baseCcy = (req.query.currency || "USD").toUpperCase();
+    const raw = await tigerFetch("assets", { account: TIGER_LIVE_ACCOUNT, base_currency: baseCcy });
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    const data = parsed?.items?.[0] || parsed || {};
+    res.json({
+      buyingPower: data.buyingPower ?? data.buying_power ?? 0,
+      cashBalance: data.cashValue ?? data.cashBalance ?? data.cash_balance ?? 0,
+      currency: baseCcy,
+      netLiquidation: data.netLiquidation ?? data.net_liquidation ?? 0,
+    });
+  } catch (err) {
+    console.error("Tiger assets error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/tiger/order", async (req, res) => {
+  if (!TIGER_ID || !TIGER_PRIVATE_KEY) {
+    return res.status(503).json({ error: "Tiger API not configured" });
+  }
+  try {
+    const { sym, side, qty, orderType, limitPrice, livePrice } = req.body;
+    if (!sym || !side || !qty) return res.status(400).json({ error: "sym, side, qty required" });
+
+    const isAX = sym.endsWith(".AX") || sym.endsWith(".AU");
+    const symbol = isAX ? sym.replace(".AX", ".AU") : sym;
+    const currency = isAX ? "AUD" : "USD";
+
+    // ASX requires a limit price — use provided limit or fall back to live price
+    const effectiveOrderType = isAX ? "LMT" : (orderType || "MKT");
+    const effectiveLimitPrice = limitPrice || (isAX ? livePrice : null);
+
+    const bizContent = {
+      account: TIGER_LIVE_ACCOUNT,
+      symbol,
+      currency,
+      sec_type: "STK",
+      action: side,
+      order_type: effectiveOrderType,
+      total_quantity: qty,
+      time_in_force: "DAY",
+    };
+    if (effectiveLimitPrice) {
+      bizContent.limit_price = effectiveLimitPrice;
+    }
+    if (!isAX) {
+      bizContent.outside_rth = true;
+    }
+
+    const data = await tigerFetch("place_order", bizContent);
+    console.log(`Tiger order: ${side} ${qty} ${symbol} →`, data);
+    res.json({ success: true, orderId: data?.id || data?.orderId || "submitted", status: data?.status || "SUBMITTED" });
+  } catch (err) {
+    console.error("Tiger order error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/tiger/orders", async (req, res) => {
+  if (!TIGER_ID || !TIGER_PRIVATE_KEY) {
+    return res.status(503).json({ error: "Tiger API not configured" });
+  }
+  try {
+    const data = await tigerFetch("orders", { account: TIGER_LIVE_ACCOUNT });
+    const parsed = typeof data === "string" ? JSON.parse(data) : data;
+    const items = (parsed && parsed.items) || [];
+    const orders = items.map(o => ({
+      id: o.id, symbol: o.symbol, market: o.market, action: o.action,
+      orderType: o.order_type || o.orderType, status: o.status,
+      qty: o.total_quantity || o.qty, filledQty: o.filled_quantity || o.filledQty || 0,
+      limitPrice: o.limit_price || o.limitPrice, avgFillPrice: o.avg_fill_price || o.avgFillPrice,
+      currency: o.currency, name: o.name || o.symbol,
+      openTime: o.open_time || o.openTime, remark: o.remark,
+    }));
+    res.json({ orders });
+  } catch (err) {
+    console.error("Tiger orders error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Price helpers ──────────────────────────────────────────────────────────
 const COINGECKO_IDS = {
   BTC:"bitcoin", ETH:"ethereum", SOL:"solana", BNB:"binancecoin",
@@ -856,7 +942,7 @@ app.get("/api/fundamentals/:sym", async (req, res) => {
 
 // ── Detailed technical analysis with chart annotations ─────────────────────
 app.post("/api/analyse/detail", async (req, res) => {
-  const { sym, name, candles, range, currentPrice, currency, indicators, fundamentals } = req.body;
+  const { sym, name, candles, range, currentPrice, currency, indicators, fundamentals, initialVerdict } = req.body;
   if (!sym || !candles?.length) return res.status(400).json({ error: "sym and candles required" });
 
   const recent = candles.slice(-40);
@@ -938,12 +1024,12 @@ app.post("/api/analyse/detail", async (req, res) => {
       headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
         model: "claude-sonnet-4-20250514",
-        max_tokens: 1500,
+        max_tokens: 1500, temperature: 0.3,
         system: `You are a senior investment analyst. Today is ${new Date().toLocaleDateString("en-AU",{year:"numeric",month:"long",day:"numeric"})}. You have been given live OHLCV chart data for this asset. Using this chart data AND your knowledge of the asset's fundamentals, sector dynamics, macro environment, and market conditions as of today, produce a single unified investment analysis with ONE verdict. Integrate technical signals from the chart with fundamental and macro factors — do not treat them as separate signals. The current live price is the closing price of the most recent candle. Return ONLY valid JSON (no markdown fences):
 {"verdict":"BUY|WATCH|AVOID|HOLD","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","target":"$X","stopLoss":"$X","summary":"2-3 sentences combining all factors","macro":"2-3 sentences","fundamental":"2-3 sentences","technical":"2-3 sentences based on the chart data","sentiment":"2-3 sentences","portfolio":"2-3 sentences","support":[{"price":0.0,"label":"Label","strength":"STRONG|MEDIUM|WEAK"}],"resistance":[{"price":0.0,"label":"Label","strength":"STRONG|MEDIUM|WEAK"}],"pattern":{"name":"Pattern name or null","bullish":true,"note":"1 sentence"},"momentum":"1-2 sentences","volume":"1 sentence"}
 Horizon definitions: Short = up to 3 months; Medium = 3 months to 1 year; Long = 1 year or more.
 Match your horizon to the chart range: 1mo = Short, 3mo = Short, 6mo = Medium, 1y = Medium, 5y = Long.
-Provide 1-3 support and 1-3 resistance levels using actual prices from the data.${fundamentalsBlock}${indicatorsBlock}`,
+Provide 1-3 support and 1-3 resistance levels using actual prices from the data.${initialVerdict ? `\n\nIMPORTANT: The initial analysis gave a verdict of "${initialVerdict}". Your detailed analysis should be consistent with this verdict unless the live chart data and indicators provide strong, clear evidence to the contrary. Do not downgrade a BUY to WATCH simply due to normal uncertainty — only change the verdict if the technical data materially contradicts it.` : ""}${fundamentalsBlock}${indicatorsBlock}`,
         messages: [{ role: "user", content: `Symbol: ${sym} (${name})\nCurrent: ${currentPrice} ${currency} | Range: ${range} | Change: ${chgPct}%\nPrice range: ${minP?.toFixed(2)} – ${maxP?.toFixed(2)}\n\nOHLCV (i=candle index, vR=vol vs avg):\n${JSON.stringify(summary)}` }],
       })
     });
@@ -1144,7 +1230,7 @@ app.get("/api/dashboard/picks", async (req, res) => {
       headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
         model: "claude-sonnet-4-20250514",
-        max_tokens: 3000,
+        max_tokens: 3000, temperature: 0.3,
         system: `You are a senior investment analyst generating today's top picks. Today is ${today}.
 ${benchmarks}${cryptoPrices}${newsHeadlines}
 
@@ -1278,7 +1364,7 @@ Respond ONLY with a valid JSON array, no markdown fences. Each pick must use thi
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514", max_tokens: 3000, stream: true,
+        model: "claude-sonnet-4-20250514", max_tokens: 3000, stream: true, temperature: 0.3,
         system: sysPrompt,
         messages: [{ role: "user", content: "Generate today's 3 top investment picks. Ground every pick in the live market data provided. Be specific and aggressive." }],
       }),
@@ -1359,7 +1445,7 @@ app.post("/api/glossary/extract", async (req, res) => {
       headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
         model: "claude-haiku-4-5-20251001",
-        max_tokens: 1200,
+        max_tokens: 1200, temperature: 0.3,
         system: `You are a financial glossary extractor. Given investment analysis text, identify technical terms related to stocks, crypto, finance, economics, or trading that a retail investor might not know. Return ONLY a valid JSON array (no markdown) of new terms not in common knowledge. Each item: {"term":"Term","definition":"Clear 1-2 sentence definition for a retail investor."}. Return [] if no new terms found. Limit to 8 terms maximum.`,
         messages: [{ role: "user", content: `Extract financial/investment terms from this text:\n\n${text.slice(0, 3000)}` }],
       }),
@@ -1391,7 +1477,7 @@ app.post("/api/journal/analyse", async (req, res) => {
       method: "POST",
       headers: { "Content-Type":"application/json", "x-api-key":ANTHROPIC_API_KEY, "anthropic-version":"2023-06-01" },
       body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001", max_tokens: 1500,
+        model: "claude-haiku-4-5-20251001", max_tokens: 1500, temperature: 0.3,
         system: `You are a trading coach specialising in behavioural finance. Today is ${today}. Analyse this trade journal for patterns and provide honest, direct coaching. Focus on behavioural patterns not just performance. Return ONLY valid JSON:
 {"summary":"2-3 sentences overall assessment","patterns":[{"pattern":"Name of behavioural pattern","description":"1-2 sentences explaining the pattern with specific examples from the journal","severity":"HIGH|MEDIUM|LOW","advice":"Specific actionable advice to address this"}],"strengths":["short string"],"weaknesses":["short string"],"winRate":"X% (N/N trades)" or null,"avgHoldDays":number or null,"topMistake":"1 sentence on the single biggest mistake","keyAdvice":"The most important piece of advice in 1-2 sentences"}`,
         messages: [{ role:"user", content: `Analyse my trade journal (${entries.length} entries):\n\n${lines.join("\n")}` }],
@@ -1427,7 +1513,7 @@ app.post("/api/macro", async (req, res) => {
       method: "POST",
       headers: { "Content-Type":"application/json", "x-api-key":ANTHROPIC_API_KEY, "anthropic-version":"2023-06-01" },
       body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001", max_tokens: 2500,
+        model: "claude-haiku-4-5-20251001", max_tokens: 2500, temperature: 0.3,
         system: `You are a macro economist. Today is ${today}. Generate the upcoming macro events for the next 6 weeks that matter to investors. Include central bank meetings, major economic data releases (CPI, jobs, GDP, PMI), and any known scheduled events. For each event, assess the portfolio impact for these holdings: ${holdings}. Return ONLY valid JSON array (no markdown):
 [{"date":"YYYY-MM-DD","event":"Event name","category":"FED|RBA|ECB|INFLATION|EMPLOYMENT|GROWTH|TRADE|OTHER","country":"US|AU|EU|CN|GLOBAL","importance":"HIGH|MEDIUM|LOW","preview":"1 sentence on what to expect","portfolioImpact":"1-2 sentences on how this affects the specific holdings listed — be specific about which holdings are most affected","bullCase":"If outcome beats expectations: 1 sentence","bearCase":"If outcome misses: 1 sentence","affectedHoldings":["SYM1","SYM2"]}]
 Return 8–14 events. Sort by date ascending. Only include events you are confident will occur around this time — do not invent speculative events.`,
@@ -1458,7 +1544,7 @@ app.post("/api/screener", async (req, res) => {
       method: "POST",
       headers: { "Content-Type":"application/json", "x-api-key":ANTHROPIC_API_KEY, "anthropic-version":"2023-06-01" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514", max_tokens: 2000,
+        model: "claude-sonnet-4-20250514", max_tokens: 2000, temperature: 0.3,
         system: `You are a senior investment analyst running a stock screener. Today is ${today}. The user has described what they are looking for in plain English. Return 5–7 stocks that best match their criteria as of today. Be specific and current — pick stocks that genuinely fit right now, not generic examples. ASX tickers must end in .AX. Return ONLY a valid JSON array with no markdown, no preamble, no explanation — just the raw JSON array:
 [{"sym":"TICKER","name":"Full Company Name","sector":"Sector","verdict":"BUY|WATCH|AVOID|HOLD","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","priceStatic":0.00,"target":"$X","upside":"+X%","up":true,"priceType":"stock or crypto","priceCurrency":"USD or AUD","avgCurrency":"USD or AUD","matchReason":"2-3 sentences on exactly why this matches the screen criteria","summary":"2-3 sentences on the investment thesis"}]
 Horizon definitions: Short = up to 3 months; Medium = 3 months to 1 year; Long = 1 year or more.`,
@@ -1805,7 +1891,7 @@ app.post("/api/portfolio/coach", async (req, res) => {
       method: "POST",
       headers: { "Content-Type":"application/json", "x-api-key":ANTHROPIC_API_KEY, "anthropic-version":"2023-06-01" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514", max_tokens: 2000,
+        model: "claude-sonnet-4-20250514", max_tokens: 2000, temperature: 0.3,
         system: `You are a senior portfolio strategist. Today is ${today}. Analyse this portfolio and provide honest, actionable coaching. Be specific — name actual positions. Return ONLY valid JSON (no markdown fences):
 {"grade":"A|B|C|D|F","gradeNote":"One sentence justifying the grade","summary":"2-3 sentences overall portfolio assessment","concentration":"2-3 sentences naming specific over-weight positions","diversification":"2-3 sentences on diversification quality","riskProfile":"AGGRESSIVE|BALANCED|CONSERVATIVE","riskNote":"1-2 sentences","strengths":["up to 3 short strength strings"],"weaknesses":["up to 3 short weakness strings"],"actions":[{"priority":"HIGH|MEDIUM|LOW","action":"Specific action to take","reason":"Why this matters"}],"sectorComment":"1-2 sentences on sector allocation","cryptoComment":"1-2 sentences on crypto allocation — omit key if no crypto","outlook":"1-2 sentences on portfolio outlook given current market conditions"}
 Provide 2-4 specific, concrete actions.`,

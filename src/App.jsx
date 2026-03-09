@@ -1058,12 +1058,12 @@ function HoldingRow({ holding, livePrice, expanded, onToggle, onRemove, onViewCh
                 CHART
               </button>
             )}
-            {(holding.source === "coinbase" || holding.source === "binance") && onTrade && (
+            {(holding.source === "coinbase" || holding.source === "binance" || holding.source === "tiger") && onTrade && (
               <>
-                <button onClick={e=>{e.stopPropagation();onTrade({sym:holding.sym,name:holding.name,productId:`${holding.sym}-USD`,side:"BUY",priceType:"crypto",exchange:holding.source});}} style={{ background:"#00e67610", border:"1px solid #00e67640", borderRadius:8, padding:"7px 14px", color:"var(--green)", fontSize:11, fontFamily:"var(--ff-mono)", letterSpacing:"0.06em" }}>
+                <button onClick={e=>{e.stopPropagation();onTrade(holding.source==="tiger"?{sym:holding.sym,name:holding.name,side:"BUY",priceType:"stock",exchange:"tiger"}:{sym:holding.sym,name:holding.name,productId:`${holding.sym}-USD`,side:"BUY",priceType:"crypto",exchange:holding.source});}} style={{ background:"#00e67610", border:"1px solid #00e67640", borderRadius:8, padding:"7px 14px", color:"var(--green)", fontSize:11, fontFamily:"var(--ff-mono)", letterSpacing:"0.06em" }}>
                   BUY
                 </button>
-                <button onClick={e=>{e.stopPropagation();onTrade({sym:holding.sym,name:holding.name,productId:`${holding.sym}-USD`,side:"SELL",priceType:"crypto",exchange:holding.source});}} style={{ background:"#ff525218", border:"1px solid #ff525240", borderRadius:8, padding:"7px 14px", color:"var(--red)", fontSize:11, fontFamily:"var(--ff-mono)", letterSpacing:"0.06em" }}>
+                <button onClick={e=>{e.stopPropagation();onTrade(holding.source==="tiger"?{sym:holding.sym,name:holding.name,side:"SELL",priceType:"stock",exchange:"tiger"}:{sym:holding.sym,name:holding.name,productId:`${holding.sym}-USD`,side:"SELL",priceType:"crypto",exchange:holding.source});}} style={{ background:"#ff525218", border:"1px solid #ff525240", borderRadius:8, padding:"7px 14px", color:"var(--red)", fontSize:11, fontFamily:"var(--ff-mono)", letterSpacing:"0.06em" }}>
                   SELL
                 </button>
               </>
@@ -1128,7 +1128,7 @@ function SourcePanel({ label, color, holdings, livePrices, syncing, lastSync, er
         </div>
       ) : !error && (
         <div style={{ background:"var(--card)", border:"1px solid var(--border)", borderRadius:12, padding:"32px", textAlign:"center" }}>
-          <p style={{ color:"var(--muted2)", fontSize:13 }}>{syncing ? "Connecting…" : "No holdings found. Check your API keys in .env"}</p>
+          <p style={{ color:"var(--muted2)", fontSize:13 }}>{syncing ? "Connecting…" : lastSync ? "No open positions" : "No holdings found. Check your API keys in .env"}</p>
         </div>
       )}
     </div>
@@ -1947,37 +1947,51 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
   const { sym, name } = config;
   const [exchange, setExchange] = useState(config.exchange || null);
   const isBinance = exchange === "binance";
-  const tradeCcy = "USD";
-  const ccySymbol = "$";
+  const isTiger = exchange === "tiger";
+  const isAX = sym.endsWith(".AX") || sym.endsWith(".AU");
+  const tradeCcy = isTiger ? (isAX ? "AUD" : "USD") : "USD";
+  const ccySymbol = tradeCcy === "AUD" ? "A$" : "$";
+  const tigerMarket = isAX ? "ASX" : "US";
 
   const [side, setSide] = useState(config.side || "BUY");
   const [step, setStep] = useState(1);
   const [availBal, setAvailBal] = useState(null);
+  const [tigerBalCcy, setTigerBalCcy] = useState("USD");
   const [usdcBal, setUsdcBal] = useState(null);
   const [quoteAmount, setQuoteAmount] = useState("");
   const [cryptoQty, setCryptoQty] = useState("");
+  const [shareQty, setShareQty] = useState("");
+  const [tigerOrderType, setTigerOrderType] = useState("MKT");
+  const [limitPrice, setLimitPrice] = useState("");
   const [livePrice, setLivePrice] = useState(null);
   const [result, setResult] = useState(null);
   const [placing, setPlacing] = useState(false);
   const [bnTicker, setBnTicker] = useState(null);
 
-  // Fetch prices from both exchanges for comparison
+  // Fetch prices
   useEffect(() => {
-    fetch(`/api/binance/ticker/${sym}`)
-      .then(r => r.json())
-      .then(d => { if (d.price) setBnTicker(d); })
-      .catch(() => {});
+    if (!isTiger) {
+      fetch(`/api/binance/ticker/${sym}`)
+        .then(r => r.json())
+        .then(d => { if (d.price) setBnTicker(d); })
+        .catch(() => {});
+    }
     fetch(`/api/chart/${sym}?range=1d`)
       .then(r => r.json())
       .then(d => { if (d.currentPrice) setLivePrice(d.currentPrice); })
       .catch(() => {});
-  }, [sym]);
+  }, [sym, isTiger]);
 
   // Fetch balance when exchange changes
   useEffect(() => {
     if (!exchange) return;
     setAvailBal(null); setUsdcBal(null);
-    if (isBinance) {
+    if (isTiger) {
+      fetch(`/api/tiger/assets?currency=${tradeCcy}`)
+        .then(r => r.json())
+        .then(d => { setAvailBal(d.buyingPower ?? null); setTigerBalCcy(d.currency || tradeCcy); })
+        .catch(() => setAvailBal(null));
+    } else if (isBinance) {
       fetch("/api/binance/usdt-balance")
         .then(r => r.json())
         .then(d => { setAvailBal(d.available ?? null); })
@@ -1988,9 +2002,9 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
         .then(d => { setAvailBal(d.available ?? null); setUsdcBal(d.availableUSDC ?? null); })
         .catch(() => setAvailBal(null));
     }
-  }, [exchange, isBinance]);
+  }, [exchange, isBinance, isTiger, tradeCcy]);
 
-  // Auto-select cheaper exchange when none specified
+  // Auto-select cheaper exchange when none specified (crypto only)
   useEffect(() => {
     if (exchange) return;
     if (bnTicker && livePrice) {
@@ -2006,23 +2020,41 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
 
   // Determine which exchange is cheaper (for badge)
   const cheaper = (() => {
-    if (!bnTicker?.price || !livePrice) return null;
-    const bnEff = bnTicker.price * 1.001;  // 0.10% fee
-    const cbEff = livePrice * 1.006;       // 0.60% fee
+    if (isTiger || !bnTicker?.price || !livePrice) return null;
+    const bnEff = bnTicker.price * 1.001;
+    const cbEff = livePrice * 1.006;
     return side === "BUY" ? (bnEff <= cbEff ? "binance" : "coinbase") : (bnEff >= cbEff ? "binance" : "coinbase");
   })();
 
   const livePriceDisplay = isBinance && bnTicker?.price ? bnTicker.price : livePrice;
-  const estQty = side === "BUY" && livePriceDisplay && parseFloat(quoteAmount) > 0
+  const estQty = !isTiger && side === "BUY" && livePriceDisplay && parseFloat(quoteAmount) > 0
     ? (parseFloat(quoteAmount) / livePriceDisplay).toFixed(6) : null;
+  const tigerEstCost = isTiger && livePriceDisplay && parseInt(shareQty) > 0
+    ? (parseInt(shareQty) * livePriceDisplay) : null;
 
-  const canReview = exchange && (side === "BUY" ? !!parseFloat(quoteAmount) : !!parseFloat(cryptoQty));
+  const canReview = isTiger
+    ? parseInt(shareQty) > 0
+    : exchange && (side === "BUY" ? !!parseFloat(quoteAmount) : !!parseFloat(cryptoQty));
 
   async function placeOrder() {
     setPlacing(true);
     try {
       let r, data;
-      if (isBinance) {
+      if (isTiger) {
+        const body = { sym, side, qty: parseInt(shareQty), orderType: tigerOrderType, livePrice: livePriceDisplay };
+        if (tigerOrderType === "LMT" && parseFloat(limitPrice) > 0) body.limitPrice = parseFloat(limitPrice);
+        r = await fetch("/api/tiger/order", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        data = await r.json();
+        if (r.ok && data.success) {
+          setResult({ ok: true, orderId: String(data.orderId), productId: sym, status: data.status || "SUBMITTED" });
+        } else {
+          setResult({ ok: false, error: data.error || JSON.stringify(data) });
+        }
+      } else if (isBinance) {
         const body = { sym, side };
         if (side === "BUY") body.quoteAmount = parseFloat(quoteAmount);
         else body.qty = parseFloat(cryptoQty);
@@ -2043,7 +2075,7 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
           setResult({ ok: false, error: data.error || JSON.stringify(data) });
         }
       } else {
-        const body = { sym, side, tradeCcy, orderType: "market", audUsd };
+        const body = { sym, side, tradeCcy: "USD", orderType: "market", audUsd };
         if (side === "BUY") body.quoteSize = parseFloat(quoteAmount);
         else body.baseSize = parseFloat(cryptoQty);
         r = await fetch("/api/coinbase/order", {
@@ -2073,6 +2105,7 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
 
   const btnBase = { border:"none", borderRadius:8, padding:"9px 22px", fontSize:12, fontFamily:"var(--ff-mono)", letterSpacing:"0.06em", cursor:"pointer", fontWeight:700 };
   const inputStyle = { width:"100%", background:"var(--card)", border:"1px solid var(--border2)", borderRadius:8, padding:"10px 14px", color:"var(--text2)", fontFamily:"var(--ff-mono)", fontSize:15, boxSizing:"border-box" };
+  const exchangeLabel = isTiger ? "Tiger Brokers" : isBinance ? "Binance" : "Coinbase";
 
   return (
     <div onClick={onClose} style={{ position:"fixed", inset:0, background:"#00000090", zIndex:1000, display:"flex", alignItems:"center", justifyContent:"center", padding:"20px" }}>
@@ -2080,7 +2113,10 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:22 }}>
           <div>
             <h2 style={{ fontFamily:"var(--ff-head)", fontSize:20, fontWeight:800, color:"var(--text2)", margin:0 }}>Trade {sym}</h2>
-            <p style={{ fontSize:11, color:"var(--muted)", fontFamily:"var(--ff-mono)", margin:"4px 0 0", letterSpacing:"0.06em" }}>{name} · {exchange ? (isBinance ? "Binance" : "Coinbase") : "Select exchange"} · {sym}/{tradeCcy}</p>
+            <p style={{ fontSize:11, color:"var(--muted)", fontFamily:"var(--ff-mono)", margin:"4px 0 0", letterSpacing:"0.06em" }}>
+              {name} · {exchange ? exchangeLabel : "Select exchange"}
+              {isTiger && <span style={{ marginLeft:6, background:"#FF660018", border:"1px solid #FF660040", borderRadius:4, padding:"1px 6px", fontSize:9, color:"#FF6600" }}>{tigerMarket}</span>}
+            </p>
           </div>
           <button onClick={onClose} style={{ background:"none", border:"none", color:"var(--muted2)", fontSize:20, cursor:"pointer", lineHeight:1 }}>✕</button>
         </div>
@@ -2091,6 +2127,15 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
 
         {step === 1 && (
           <>
+            {isTiger ? (
+              <div style={{ marginBottom:18 }}>
+                <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>EXCHANGE</div>
+                <div style={{ background:"#FF660018", border:"1px solid #FF660060", borderRadius:10, padding:"10px 14px" }}>
+                  <div style={{ fontSize:11, fontWeight:700, color:"#FF6600", fontFamily:"var(--ff-head)" }}>Tiger Brokers</div>
+                  <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginTop:4 }}>{tigerMarket} MARKET · STOCKS</div>
+                </div>
+              </div>
+            ) : (
             <div style={{ marginBottom:18 }}>
               <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>EXCHANGE</div>
               <div style={{ display:"flex", gap:8 }}>
@@ -2118,6 +2163,7 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
                 })}
               </div>
             </div>
+            )}
             <div style={{ display:"flex", gap:8, marginBottom:18 }}>
               {["BUY","SELL"].map(s => (
                 <button key={s} onClick={() => setSide(s)} style={{ ...btnBase, flex:1,
@@ -2129,15 +2175,15 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
               ))}
             </div>
             <div style={{ marginBottom:18 }}>
-              <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>{isBinance ? "USDT" : "USD"} AVAILABLE</div>
+              <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>{isTiger ? "BUYING POWER" : isBinance ? "USDT" : "USD"} AVAILABLE</div>
               <div style={{ fontSize:16, fontFamily:"var(--ff-mono)", color:"var(--text2)", fontWeight:600 }}>
                 {!exchange ? "—" : availBal != null ? `${ccySymbol}${availBal.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}` : "Loading…"}
               </div>
-              {!isBinance && usdcBal != null && <div style={{ fontSize:10, fontFamily:"var(--ff-mono)", color:"var(--muted)", marginTop:4 }}>
+              {!isBinance && !isTiger && usdcBal != null && <div style={{ fontSize:10, fontFamily:"var(--ff-mono)", color:"var(--muted)", marginTop:4 }}>
                 USDC: ${usdcBal.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}
               </div>}
             </div>
-            {side === "BUY" && !isBinance && usdcBal != null && usdcBal <= 0 && availBal != null && availBal <= 0 && (
+            {side === "BUY" && !isBinance && !isTiger && usdcBal != null && usdcBal <= 0 && availBal != null && availBal <= 0 && (
               <div style={{ background:"#ffab4010", border:"1px solid #ffab4040", borderRadius:10, padding:"10px 14px", fontSize:11, color:"var(--amber)", marginBottom:18, lineHeight:1.5 }}>
                 No USDC or USD available. Coinbase Advanced Trade uses USDC/USD for buying. Buy some USDC in the Coinbase app first, then sync and retry.
               </div>
@@ -2147,18 +2193,49 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
                 No USDT available. Deposit or buy USDT on Binance to start trading.
               </div>
             )}
-            {side === "BUY" && (
-              <div style={{ marginBottom:18 }}>
-                <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>AMOUNT ({tradeCcy})</div>
-                <input value={quoteAmount} onChange={e => setQuoteAmount(e.target.value)} type="number" min="0" placeholder="e.g. 100" style={inputStyle}/>
-                {estQty && <div style={{ fontSize:10, color:"var(--muted)", fontFamily:"var(--ff-mono)", marginTop:6 }}>≈ {estQty} {sym}</div>}
-              </div>
-            )}
-            {side === "SELL" && (
-              <div style={{ marginBottom:18 }}>
-                <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>QUANTITY ({sym})</div>
-                <input value={cryptoQty} onChange={e => setCryptoQty(e.target.value)} type="number" min="0" placeholder="e.g. 0.005" style={inputStyle}/>
-              </div>
+            {isTiger ? (
+              <>
+                <div style={{ marginBottom:18 }}>
+                  <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>SHARES</div>
+                  <input value={shareQty} onChange={e => setShareQty(e.target.value.replace(/\D/g,""))} type="number" min="1" step="1" placeholder="e.g. 100" style={inputStyle}/>
+                  {tigerEstCost != null && <div style={{ fontSize:10, color:"var(--muted)", fontFamily:"var(--ff-mono)", marginTop:6 }}>Est. cost: {ccySymbol}{tigerEstCost.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})} {tradeCcy}</div>}
+                </div>
+                <div style={{ marginBottom:18 }}>
+                  <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>ORDER TYPE</div>
+                  <div style={{ display:"flex", gap:8 }}>
+                    {["MKT","LMT"].map(t => (
+                      <button key={t} onClick={() => setTigerOrderType(t)} style={{ ...btnBase, flex:1,
+                        background: t === tigerOrderType ? "#FF660018" : "var(--card)",
+                        color: t === tigerOrderType ? "#FF6600" : "var(--muted2)",
+                        border:`1px solid ${t === tigerOrderType ? "#FF660060" : "var(--border)"}` }}>
+                        {t === "MKT" ? "MARKET" : "LIMIT"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {tigerOrderType === "LMT" && (
+                  <div style={{ marginBottom:18 }}>
+                    <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>LIMIT PRICE ({tradeCcy})</div>
+                    <input value={limitPrice} onChange={e => setLimitPrice(e.target.value)} type="number" min="0" step="0.01" placeholder={livePriceDisplay ? livePriceDisplay.toFixed(2) : "0.00"} style={inputStyle}/>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                {side === "BUY" && (
+                  <div style={{ marginBottom:18 }}>
+                    <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>AMOUNT ({tradeCcy})</div>
+                    <input value={quoteAmount} onChange={e => setQuoteAmount(e.target.value)} type="number" min="0" placeholder="e.g. 100" style={inputStyle}/>
+                    {estQty && <div style={{ fontSize:10, color:"var(--muted)", fontFamily:"var(--ff-mono)", marginTop:6 }}>≈ {estQty} {sym}</div>}
+                  </div>
+                )}
+                {side === "SELL" && (
+                  <div style={{ marginBottom:18 }}>
+                    <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6 }}>QUANTITY ({sym})</div>
+                    <input value={cryptoQty} onChange={e => setCryptoQty(e.target.value)} type="number" min="0" placeholder="e.g. 0.005" style={inputStyle}/>
+                  </div>
+                )}
+              </>
             )}
             <button onClick={() => setStep(2)} disabled={!canReview}
               style={{ ...btnBase, width:"100%", background: side === "BUY" ? "var(--green)" : "var(--red)", color:"#0a0a14", opacity: canReview ? 1 : 0.4 }}>
@@ -2170,17 +2247,31 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
         {step === 2 && (
           <>
             <div style={{ background:"var(--card)", border:"1px solid var(--border)", borderRadius:12, padding:"18px 20px", marginBottom:20 }}>
-              {[
+              {(isTiger ? (() => {
+                const brokerage = isAX ? (tigerEstCost != null && tigerEstCost >= 20000 ? 6 : 3) : 2;
+                const total = tigerEstCost != null ? tigerEstCost + brokerage : null;
+                return [
+                { l:"EXCHANGE", v:"Tiger Brokers" },
+                { l:"SYMBOL", v:sym },
+                { l:"MARKET", v:tigerMarket },
+                { l:"SIDE", v:side },
+                { l:"SHARES", v:shareQty },
+                tigerEstCost != null && { l:"EST. COST", v:`${ccySymbol}${tigerEstCost.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}` },
+                { l:"TYPE", v:tigerOrderType === "MKT" ? "MARKET" : `LIMIT @ ${ccySymbol}${limitPrice}` },
+                { l:"BROKERAGE", v:`${ccySymbol}${brokerage.toFixed(2)}` },
+                total != null && { l:"TOTAL", v:`${ccySymbol}${total.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})} ${tradeCcy}`, bold:true },
+                ];
+              })() : [
                 { l:"EXCHANGE", v:isBinance ? "Binance" : "Coinbase" },
                 { l:"ASSET", v:sym },
                 { l:"SIDE", v:side },
                 side === "BUY" && { l:"SPEND", v:`${ccySymbol}${parseFloat(quoteAmount).toFixed(2)} ${tradeCcy}` },
                 side === "SELL" && { l:"SELL QTY", v:`${cryptoQty} ${sym}` },
                 { l:"TYPE", v:"MARKET" },
-              ].filter(Boolean).map(f => (
-                <div key={f.l} style={{ display:"flex", justifyContent:"space-between", marginBottom:12 }}>
-                  <span style={{ fontSize:10, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em" }}>{f.l}</span>
-                  <span style={{ fontSize:13, fontFamily:"var(--ff-mono)", color:"var(--text2)", fontWeight:600 }}>{f.v}</span>
+              ]).filter(Boolean).map(f => (
+                <div key={f.l} style={{ display:"flex", justifyContent:"space-between", marginBottom:12, ...(f.bold ? {borderTop:"1px solid var(--border)",paddingTop:12,marginTop:4} : {}) }}>
+                  <span style={{ fontSize:10, fontFamily:"var(--ff-mono)", color:f.bold?"var(--text2)":"var(--muted)", letterSpacing:"0.1em", fontWeight:f.bold?700:400 }}>{f.l}</span>
+                  <span style={{ fontSize:f.bold?15:13, fontFamily:"var(--ff-mono)", color:"var(--text2)", fontWeight:f.bold?800:600 }}>{f.v}</span>
                 </div>
               ))}
             </div>
@@ -2201,7 +2292,7 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
                 <>
                   <div style={{ fontSize:36, marginBottom:12 }}>✓</div>
                   <div style={{ fontFamily:"var(--ff-head)", fontSize:18, fontWeight:800, color:"var(--green)", marginBottom:8 }}>Order Placed</div>
-                  {result.productId && <div style={{ fontSize:12, fontFamily:"var(--ff-mono)", color:"var(--muted2)", marginBottom:6 }}>Pair: {result.productId}</div>}
+                  {result.productId && <div style={{ fontSize:12, fontFamily:"var(--ff-mono)", color:"var(--muted2)", marginBottom:6 }}>{isTiger ? "Symbol" : "Pair"}: {result.productId}</div>}
                   <div style={{ fontSize:11, fontFamily:"var(--ff-mono)", color:"var(--muted)", marginBottom:4 }}>Order ID: {result.orderId}</div>
                   {result.status && <div style={{ fontSize:10, fontFamily:"var(--ff-mono)", color:"var(--muted)" }}>Status: {result.status}</div>}
                 </>
@@ -2316,6 +2407,8 @@ export default function App() {
   const [tigerSyncing,setTigerS] = useState(false);
   const [tigerLastSync,setTigerL]= useState(null);
   const [tigerError,setTigerE]   = useState("");
+  const [tigerOrders,setTigerOrders] = useState([]);
+  const [tigerOrdersLoading,setTigerOL] = useState(false);
 
   const [ledgerAddrs, setLedgerAddrs] = useState(() => {
     try { return JSON.parse(localStorage.getItem("inteliq_ledger_addrs") || "[]"); } catch { return []; }
@@ -2514,7 +2607,7 @@ export default function App() {
   }, [ledgerAddrs]);
 
   // Sync exchanges on mount
-  useEffect(() => { syncCoinbase(); syncBinance(); syncTiger(); syncLedger(); }, []);
+  useEffect(() => { syncCoinbase(); syncBinance(); syncTiger(); syncTigerOrders(); syncLedger(); }, []);
 
   // Fetch dashboard picks on mount
   useEffect(() => { fetchDashPicks(); }, []);
@@ -2553,6 +2646,15 @@ export default function App() {
       if (d.error) setTigerE(d.error); else { setTiger(d.holdings||[]); setTigerL(nowTime()); }
     } catch { setTigerE("Could not connect — check Tiger API config in .env"); }
     setTigerS(false);
+  }
+
+  async function syncTigerOrders() {
+    setTigerOL(true);
+    try {
+      const r = await fetch("/api/tiger/orders"); const d = await r.json();
+      if (!d.error) setTigerOrders(d.orders || []);
+    } catch {}
+    setTigerOL(false);
   }
 
   async function syncLedger() {
@@ -2748,9 +2850,10 @@ export default function App() {
         const fr = await fetch(`/api/fundamentals/${encodeURIComponent(data.sym)}`);
         fundamentals = await fr.json();
       } catch {}
+      const iv = detailStock?.verdict || null;
       const r = await fetch("/api/analyse/detail", {
         method:"POST", headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({ sym:data.sym, name:data.name, candles:data.candles, range:data.range, currentPrice:data.currentPrice, currency:data.currency, indicators:data.indicators, fundamentals })
+        body:JSON.stringify({ sym:data.sym, name:data.name, candles:data.candles, range:data.range, currentPrice:data.currentPrice, currency:data.currency, indicators:data.indicators, fundamentals, initialVerdict:iv })
       });
       const d = await r.json();
       if (!d.error) {
@@ -2863,7 +2966,7 @@ export default function App() {
             }
             // Run comprehensive analysis and update card verdict to match
             try {
-              const ar = await fetch("/api/analyse/detail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...d, fundamentals:detailFundamentals})});
+              const ar = await fetch("/api/analyse/detail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...d, fundamentals:detailFundamentals, initialVerdict:parsed.verdict})});
               const analysis = await ar.json();
               if(!analysis.error){
                 setExplorerAnalysis(analysis);
@@ -3166,7 +3269,7 @@ export default function App() {
                     onAddWatchlist={() => addToWatchlist(searchResult)}
                     inWatchlist={!!watchlist.find(w => w.sym === searchResult.sym)}
                     onViewChart={() => openDetail({ sym:searchResult.sym, name:searchResult.name, priceType:searchResult.priceType, priceCurrency:searchResult.priceCurrency||"USD", sector:searchResult.sector }, searchResult, explorerAnalysis)}
-                    onTrade={searchResult.priceType==="crypto"&&(cbLastSync||bnLastSync)?()=>setTradeModal({sym:searchResult.sym,name:searchResult.name,productId:`${searchResult.sym}-USD`,side:"BUY",priceType:"crypto"}):undefined}
+                    onTrade={searchResult.priceType==="crypto"&&(cbLastSync||bnLastSync)?()=>setTradeModal({sym:searchResult.sym,name:searchResult.name,productId:`${searchResult.sym}-USD`,side:"BUY",priceType:"crypto"}):searchResult.priceType==="stock"&&tigerLastSync?()=>setTradeModal({sym:searchResult.sym,name:searchResult.name,side:"BUY",priceType:"stock",exchange:"tiger"}):undefined}
                   />
                   {explorerChartLoading && (
                     <div className="shimmer-el" style={{height:260,marginTop:16,borderRadius:14}}/>
@@ -3178,6 +3281,11 @@ export default function App() {
                         <div style={{display:"flex",gap:8}}>
                           {searchResult?.priceType==="crypto" && (cbLastSync || bnLastSync) && (
                             <button onClick={()=>setTradeModal({sym:searchResult.sym,name:searchResult.name,productId:`${searchResult.sym}-USD`,side:"BUY",priceType:"crypto"})} style={{background:"#00e67610",border:"1px solid #00e67640",borderRadius:7,padding:"4px 12px",fontSize:10,color:"var(--green)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",fontWeight:700}}>
+                              ↔ TRADE
+                            </button>
+                          )}
+                          {searchResult?.priceType==="stock" && tigerLastSync && (
+                            <button onClick={()=>setTradeModal({sym:searchResult.sym,name:searchResult.name,side:"BUY",priceType:"stock",exchange:"tiger"})} style={{background:"#00e67610",border:"1px solid #00e67640",borderRadius:7,padding:"4px 12px",fontSize:10,color:"var(--green)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",fontWeight:700}}>
                               ↔ TRADE
                             </button>
                           )}
@@ -3401,7 +3509,7 @@ export default function App() {
                             const avgUSD   = toDisplay(h.avg, h.avgCurrency || "USD", "USD", audUsd);
                             const valueUSD = priceUSD != null ? h.qty * priceUSD : h.qty * avgUSD;
                             const weight   = totalPortUSD > 0 ? (valueUSD / totalPortUSD) * 100 : null;
-                            return <HoldingRow key={`${h.source}-${h.sym}`} holding={h} livePrice={livePrices[h.sym]} expanded={portExp===`${h.source}-${h.sym}`} onToggle={()=>setPortExp(p=>p===`${h.source}-${h.sym}`?null:`${h.source}-${h.sym}`)} onRemove={h.source==="cmc"?()=>setCmc(p=>p.filter(x=>x.sym!==h.sym)):null} onViewChart={()=>openDetail({sym:h.sym,name:h.name,priceType:h.priceType,priceCurrency:h.priceCurrency||"USD",sector:h.sector})} onTrade={(h.source==="coinbase"||h.source==="binance")?cfg=>setTradeModal({...cfg,exchange:h.source}):null} displayCcy={displayCcy} audUsd={audUsd} portWeight={weight}/>;
+                            return <HoldingRow key={`${h.source}-${h.sym}`} holding={h} livePrice={livePrices[h.sym]} expanded={portExp===`${h.source}-${h.sym}`} onToggle={()=>setPortExp(p=>p===`${h.source}-${h.sym}`?null:`${h.source}-${h.sym}`)} onRemove={h.source==="cmc"?()=>setCmc(p=>p.filter(x=>x.sym!==h.sym)):null} onViewChart={()=>openDetail({sym:h.sym,name:h.name,priceType:h.priceType,priceCurrency:h.priceCurrency||"USD",sector:h.sector})} onTrade={(h.source==="coinbase"||h.source==="binance"||h.source==="tiger")?cfg=>setTradeModal({...cfg,exchange:h.source}):null} displayCcy={displayCcy} audUsd={audUsd} portWeight={weight}/>;
                           });
                         })()}
                       </div>
@@ -3430,7 +3538,52 @@ export default function App() {
               )}
 
               {portTab==="tiger"&&(
-                <SourcePanel label="Tiger" color="#FF6600" holdings={tigerHoldings} livePrices={livePrices} syncing={tigerSyncing} lastSync={tigerLastSync} error={tigerError} onSync={syncTiger} onRemove={sym=>setTiger(p=>p.filter(h=>h.sym!==sym))} onViewChart={h=>openDetail({sym:h.sym,name:h.name,priceType:h.priceType,priceCurrency:h.priceCurrency||h.avgCurrency||"AUD",sector:h.sector})} displayCcy={displayCcy} audUsd={audUsd}/>
+                <div>
+                <SourcePanel label="Tiger" color="#FF6600" holdings={tigerHoldings} livePrices={livePrices} syncing={tigerSyncing} lastSync={tigerLastSync} error={tigerError} onSync={syncTiger} onRemove={sym=>setTiger(p=>p.filter(h=>h.sym!==sym))} onViewChart={h=>openDetail({sym:h.sym,name:h.name,priceType:h.priceType,priceCurrency:h.priceCurrency||h.avgCurrency||"AUD",sector:h.sector})} onTrade={cfg=>setTradeModal({...cfg,exchange:"tiger"})} displayCcy={displayCcy} audUsd={audUsd}/>
+
+                {/* Tiger Orders */}
+                <div style={{marginTop:28}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+                    <span style={{fontSize:11,fontFamily:"var(--ff-mono)",fontWeight:700,color:"var(--muted2)",letterSpacing:"0.08em"}}>ORDERS ({tigerOrders.length})</span>
+                    <button onClick={syncTigerOrders} disabled={tigerOrdersLoading} style={{background:"none",border:"1px solid var(--border)",borderRadius:8,padding:"5px 12px",fontSize:10,color:tigerOrdersLoading?"var(--muted)":"var(--muted2)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",opacity:tigerOrdersLoading?.5:1}}>
+                      {tigerOrdersLoading?"↻ LOADING…":"↻ REFRESH"}
+                    </button>
+                  </div>
+                  {tigerOrders.length===0?(
+                    <div className="card" style={{padding:"36px 24px",textAlign:"center"}}>
+                      <p style={{color:"var(--muted2)",fontSize:13,fontFamily:"var(--ff-head)",fontWeight:600}}>No orders yet</p>
+                      <p style={{color:"var(--muted)",fontSize:12,marginTop:6}}>Orders placed via Tiger will appear here.</p>
+                    </div>
+                  ):(
+                    <div style={{display:"grid",gap:8}}>
+                      {tigerOrders.map(o=>{
+                        const isBuy = (o.action||"").toUpperCase()==="BUY";
+                        const st = (o.status||"").toUpperCase();
+                        const isFaded = st.includes("INVALID")||st.includes("CANCEL")||st.includes("REJECT");
+                        const stColor = st.includes("FILL")?"var(--green)":st.includes("PEND")||st.includes("INIT")||st.includes("NEW")?"var(--amber)":st.includes("INVALID")||st.includes("REJECT")?"var(--red)":"var(--muted)";
+                        return (
+                          <div key={o.id} className="card" style={{padding:16,borderLeft:`3px solid ${isBuy?"var(--green)":"var(--red)"}`,opacity:isFaded?0.55:1}}>
+                            <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:6,flexWrap:"wrap"}}>
+                              <span className="badge" style={{background:isBuy?"#00e67618":"#ff525218",color:isBuy?"var(--green)":"var(--red)",border:`1px solid ${isBuy?"#00e67640":"#ff525240"}`}}>{o.action}</span>
+                              <span style={{fontFamily:"var(--ff-head)",fontSize:15,fontWeight:700,color:"var(--text2)"}}>{o.symbol}</span>
+                              <span className="badge" style={{background:stColor+"18",color:stColor,border:`1px solid ${stColor}40`}}>{o.status}</span>
+                            </div>
+                            <div style={{fontSize:11,fontFamily:"var(--ff-mono)",color:"var(--muted2)",display:"flex",gap:14,flexWrap:"wrap"}}>
+                              <span>Qty: {o.qty}</span>
+                              {o.limitPrice!=null&&<span>Limit: {o.limitPrice}</span>}
+                              {o.filledQty>0&&<span>Filled: {o.filledQty}</span>}
+                              {o.avgFillPrice!=null&&o.avgFillPrice>0&&<span>Avg: {o.avgFillPrice}</span>}
+                              {o.currency&&<span>{o.currency}</span>}
+                            </div>
+                            {o.openTime&&<div style={{fontSize:10,fontFamily:"var(--ff-mono)",color:"var(--muted)",marginTop:6}}>{new Date(typeof o.openTime==="number"?o.openTime:o.openTime).toLocaleString()}</div>}
+                            {o.remark&&<p style={{fontSize:11,color:"var(--amber)",marginTop:6,fontStyle:"italic",lineHeight:1.4}}>{o.remark}</p>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+                </div>
               )}
 
               {portTab==="ledger"&&(
@@ -4432,6 +4585,11 @@ export default function App() {
                           ↔ TRADE
                         </button>
                       )}
+                      {detailSym?.priceType==="stock" && tigerLastSync && (
+                        <button onClick={()=>setTradeModal({sym:detailSym.sym,name:detailSym.name,side:"BUY",priceType:"stock",exchange:"tiger"})} style={{background:"#00e67610",border:"1px solid #00e67640",borderRadius:8,padding:"8px 18px",fontSize:11,color:"var(--green)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",fontWeight:700,cursor:"pointer"}}>
+                          ↔ TRADE
+                        </button>
+                      )}
                       <CurrencyToggle value={displayCcy} onChange={setDisplayCcy}/>
                     </div>
                   </div>
@@ -4580,7 +4738,7 @@ export default function App() {
         </main>
       </div>
       {tradeModal && (
-        <TradeModal config={tradeModal} onClose={()=>setTradeModal(null)} onSuccess={(ex)=>{setTradeModal(null);ex==="binance"?syncBinance():syncCoinbase();}} displayCcy={displayCcy} audUsd={audUsd} />
+        <TradeModal config={tradeModal} onClose={()=>setTradeModal(null)} onSuccess={(ex)=>{setTradeModal(null);if(ex==="binance")syncBinance();else if(ex==="tiger"){syncTiger();syncTigerOrders();}else syncCoinbase();}} displayCcy={displayCcy} audUsd={audUsd} />
       )}
       <GlossaryModal open={glossaryOpen} onClose={()=>setGlossaryOpen(false)} focusTerm={glossaryTerm} allGlossary={allGlossary}/>
     </>
