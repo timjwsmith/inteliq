@@ -35,6 +35,68 @@ if (!ANTHROPIC_API_KEY) {
   process.exit(1);
 }
 
+// ── Explorer search (mobile-friendly — builds prompt server-side) ─────────
+app.post("/api/explorer/search", async (req, res) => {
+  const { query } = req.body;
+  if (!query) return res.status(400).json({ error: "query required" });
+  const today = new Date().toLocaleDateString("en-AU", { weekday:"long", year:"numeric", month:"long", day:"numeric" });
+
+  // Fetch live price if it looks like a ticker
+  let livePriceCtx = "";
+  const sym = query.toUpperCase().replace(/\s+/g, "");
+  try {
+    const isLikelyCrypto = ["BTC","ETH","SOL","ADA","DOT","DOGE","XRP","AVAX","MATIC","LINK","UNI","AAVE","NU","GRT","NEAR"].includes(sym);
+    const priceResult = isLikelyCrypto ? await fetchCryptoPrice(sym) : await fetchStockPrice(sym.includes(".") ? sym : sym);
+    if (priceResult && priceResult.price) {
+      livePriceCtx = ` The LIVE market price right now is ${priceResult.currency || "USD"} ${priceResult.price}. Use this as the current price in your analysis.`;
+    }
+  } catch {}
+
+  // Fetch fundamentals for stocks
+  let fundamentalsCtx = "";
+  if (FMP_API_KEY && !["BTC","ETH","SOL","ADA","DOT","DOGE","XRP"].includes(sym)) {
+    try {
+      const fmpUrl = `https://financialmodelingprep.com/stable/profile?symbol=${encodeURIComponent(sym)}&apikey=${FMP_API_KEY}`;
+      const fr = await fetch(fmpUrl);
+      const fd = await fr.json();
+      const f = Array.isArray(fd) ? fd[0] : fd;
+      if (f && f.pe) {
+        const parts = [];
+        if (f.pe) parts.push(`P/E ${f.pe}`);
+        if (f.marketCap) parts.push(`MktCap $${(f.marketCap/1e9).toFixed(1)}B`);
+        if (parts.length) fundamentalsCtx = ` LIVE FUNDAMENTALS: ${parts.join(" | ")}.`;
+      }
+    } catch {}
+  }
+
+  try {
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 1000,
+        temperature: 0.3,
+        system: `You are a senior investment analyst. Today is ${today}. Your training knowledge has a cutoff of approximately mid-2025 — do NOT present specific metrics from your training data as if they are current facts. For crypto assets (BTC, ETH, SOL etc) analyse the native coin/token directly — do NOT substitute an ETF or trust product. Respond ONLY with valid JSON, no markdown:\n{"sym":"TICKER","name":"Full name","sector":"sector","verdict":"BUY|WATCH|AVOID|HOLD","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","priceStatic":123.45,"target":"$X","upside":"+X%","up":true,"priceType":"stock or crypto","priceCurrency":"USD or AUD","summary":"2-3 sentences","macro":"2-3 sentences","fundamental":"2-3 sentences","technical":"2-3 sentences","sentiment":"2-3 sentences","insider":"2-3 sentences","portfolio":"2-3 sentences"}`,
+        messages: [{ role: "user", content: `Analyse this investment: ${query}.${livePriceCtx}${fundamentalsCtx}` }],
+      }),
+    });
+    const data = await response.json();
+    // Extract JSON from Claude's response
+    const text = data?.content?.[0]?.text || "";
+    const jsonStr = text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1);
+    const parsed = JSON.parse(jsonStr);
+    res.json(parsed);
+  } catch (err) {
+    console.error("Explorer search error:", err.message);
+    res.status(500).json({ error: "Analysis failed" });
+  }
+});
+
 // ── Anthropic proxy ────────────────────────────────────────────────────────
 app.post("/api/analyse", async (req, res) => {
   try {
@@ -1513,18 +1575,39 @@ app.post("/api/macro", async (req, res) => {
       method: "POST",
       headers: { "Content-Type":"application/json", "x-api-key":ANTHROPIC_API_KEY, "anthropic-version":"2023-06-01" },
       body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001", max_tokens: 2500, temperature: 0.3,
+        model: "claude-haiku-4-5-20251001", max_tokens: 4096, temperature: 0.3,
         system: `You are a macro economist. Today is ${today}. Generate the upcoming macro events for the next 6 weeks that matter to investors. Include central bank meetings, major economic data releases (CPI, jobs, GDP, PMI), and any known scheduled events. For each event, assess the portfolio impact for these holdings: ${holdings}. Return ONLY valid JSON array (no markdown):
 [{"date":"YYYY-MM-DD","event":"Event name","category":"FED|RBA|ECB|INFLATION|EMPLOYMENT|GROWTH|TRADE|OTHER","country":"US|AU|EU|CN|GLOBAL","importance":"HIGH|MEDIUM|LOW","preview":"1 sentence on what to expect","portfolioImpact":"1-2 sentences on how this affects the specific holdings listed — be specific about which holdings are most affected","bullCase":"If outcome beats expectations: 1 sentence","bearCase":"If outcome misses: 1 sentence","affectedHoldings":["SYM1","SYM2"]}]
 Return 8–14 events. Sort by date ascending. Only include events you are confident will occur around this time — do not invent speculative events.`,
-        messages: [{ role:"user", content: `Today is ${today}. Generate the macro calendar for the next 6 weeks.` }],
+        messages: [
+          { role:"user", content: `Today is ${today}. Generate the macro calendar for the next 6 weeks.` },
+          { role:"assistant", content: "[" },
+        ],
       }),
     });
     const d = await response.json();
-    const text = d.content?.find(b => b.type === "text")?.text || "";
+    const rawText = d.content?.find(b => b.type === "text")?.text || "";
+    const text = "[" + rawText;
     const start = text.indexOf("["), end = text.lastIndexOf("]");
     if (start === -1 || end === -1) throw new Error("No JSON array");
-    const parsed = JSON.parse(text.slice(start, end + 1));
+    let jsonStr = text.slice(start, end + 1);
+    // Fix common Claude JSON issues: smart quotes, unescaped newlines, en/em dashes
+    jsonStr = jsonStr.replace(/[\u2018\u2019\u0060]/g, "'")
+                     .replace(/[\u201C\u201D]/g, '"')
+                     .replace(/[\u2013\u2014]/g, "-")
+                     .replace(/[\x00-\x1f\x7f]/g, " ");
+    let parsed;
+    try {
+      parsed = JSON.parse(jsonStr);
+    } catch (jsonErr) {
+      // Log problematic area and try aggressive fix
+      const pos = parseInt(jsonErr.message.match(/position (\d+)/)?.[1] || "0");
+      console.error("Macro JSON error at pos", pos, "char:", JSON.stringify(jsonStr[pos]), "context:", JSON.stringify(jsonStr.slice(Math.max(0,pos-100), pos+100)));
+      // Last resort: fix unescaped quotes inside values by re-encoding
+      // Strip the text to just the array brackets and try eval-safe parse
+      jsonStr = jsonStr.replace(/\n/g, " ").replace(/\r/g, " ");
+      parsed = JSON.parse(jsonStr);
+    }
     macroCache = { events: parsed, ts: now };
     console.log(`Macro: generated ${parsed.length} events`);
     res.json(parsed);
@@ -1608,6 +1691,237 @@ app.post("/api/earnings", async (req, res) => {
   const out = {};
   stockSyms.forEach(s => { if (earningsCache[s]?.data) out[s] = earningsCache[s].data; });
   res.json(out);
+});
+
+// ── CMC Holdings (server-side CSV parse) ─────────────────────────────────
+app.get("/api/cmc/holdings", (req, res) => {
+  try {
+    const fs = require("fs"), path = require("path");
+    const csvPath = path.join(__dirname, "cmc_portfolio.csv");
+    if (!fs.existsSync(csvPath)) return res.json([]);
+    const text = fs.readFileSync(csvPath, "utf8");
+    const lines = text.trim().split(/\r?\n/);
+    if (lines.length < 2) return res.json([]);
+    const headers = lines[0].replace(/^\uFEFF/, "").split(",").map(h => h.replace(/"/g, "").trim());
+    const idx = n => headers.indexOf(n);
+    const iCode = idx("Security Code"), iQty = idx("Quantity"), iAvg = idx("Average Cost $");
+    const iSector = idx("Sector"), iName = idx("Company Name");
+    if (iCode === -1 || iQty === -1 || iAvg === -1) return res.json([]);
+    const holdings = [];
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i].trim(); if (!line) continue;
+      const cols = []; let cur = "", inQ = false;
+      for (const ch of line) { if (ch === '"') inQ = !inQ; else if (ch === "," && !inQ) { cols.push(cur.trim()); cur = ""; } else cur += ch; }
+      cols.push(cur.trim());
+      const rawCode = cols[iCode] || "", qty = parseFloat(cols[iQty]), avgAUD = parseFloat(cols[iAvg]);
+      if (!rawCode || isNaN(qty) || isNaN(avgAUD) || qty <= 0) continue;
+      const isUS = /:\s*US$/i.test(rawCode);
+      let sym = rawCode.replace(/:US$/i, "").trim();
+      if (!isUS && !sym.endsWith(".AX")) sym += ".AX";
+      holdings.push({ sym, name: cols[iName] || sym, qty, avg: avgAUD, avgCurrency: "AUD", priceCurrency: isUS ? "USD" : "AUD", sector: cols[iSector] || "Unknown", horizon: "Medium", priceType: "stock", source: "cmc", rawCode });
+    }
+    res.json(holdings);
+  } catch (err) { console.error("CMC parse error:", err.message); res.json([]); }
+});
+
+// ── Combined Portfolio (all sources + live prices + P&L) ──────────────────
+app.post("/api/portfolio/combined", async (req, res) => {
+  const { cmcHoldings, ledgerAddresses } = req.body || {};
+  const audUsd = await getLiveAUDUSD();
+
+  // Fetch all sources in parallel — failures return empty arrays
+  const [cbRes, bnRes, tgRes, ldRes] = await Promise.allSettled([
+    // Coinbase
+    (COINBASE_API_KEY && COINBASE_API_SECRET) ? (async () => {
+      const portfoliosPath = "/api/v3/brokerage/portfolios";
+      const jwt1 = coinbaseJWT("GET", portfoliosPath);
+      if (!jwt1) return [];
+      const pr = await fetch(`https://api.coinbase.com${portfoliosPath}`, {
+        headers: { "Authorization": `Bearer ${jwt1}`, "Content-Type": "application/json" },
+      });
+      const portfoliosData = await pr.json();
+      const portfolios = portfoliosData.portfolios || [];
+      const defaultPortfolio = portfolios.find(p => p.type === "DEFAULT") || portfolios[0];
+      if (!defaultPortfolio) return [];
+      const breakdownPath = `/api/v3/brokerage/portfolios/${defaultPortfolio.uuid}`;
+      const jwt2 = coinbaseJWT("GET", breakdownPath);
+      const br = await fetch(`https://api.coinbase.com${breakdownPath}`, {
+        headers: { "Authorization": `Bearer ${jwt2}`, "Content-Type": "application/json" },
+      });
+      const breakdown = await br.json();
+      const spotPositions = breakdown?.breakdown?.spot_positions || [];
+      const stablecoins = ["USD", "USDC", "USDT", "DAI", "BUSD", "AUD"];
+      return spotPositions
+        .filter(p => parseFloat(p.total_balance_crypto) > 0 && !stablecoins.includes(p.asset))
+        .map(p => {
+          const qty = parseFloat(p.total_balance_crypto);
+          const costBasis = parseFloat(p.cost_basis?.value || 0);
+          return { sym: p.asset, name: p.asset, qty, avg: qty > 0 ? costBasis / qty : 0, avgCurrency: "USD", sector: "Crypto", horizon: "Medium", priceType: "crypto", source: "coinbase" };
+        });
+    })() : Promise.resolve([]),
+    // Binance
+    (BINANCE_API_KEY && BINANCE_API_SECRET) ? (async () => {
+      const account = await binanceFetch("GET", "/api/v3/account");
+      const nonZero = (account.balances || []).filter(b => parseFloat(b.free) + parseFloat(b.locked) > 0);
+      const stablecoins = ["AUD", "USD", "USDT", "USDC", "BUSD", "DAI", "TUSD", "FDUSD"];
+      const costBasis = {};
+      for (const b of nonZero) {
+        if (stablecoins.includes(b.asset)) continue;
+        try {
+          const trades = await binanceFetch("GET", "/api/v3/myTrades", { symbol: `${b.asset}USDT`, limit: 500 });
+          const buys = trades.filter(t => t.isBuyer);
+          if (buys.length > 0) {
+            const totalQty = buys.reduce((s, t) => s + parseFloat(t.qty), 0);
+            const totalCost = buys.reduce((s, t) => s + parseFloat(t.qty) * parseFloat(t.price), 0);
+            costBasis[b.asset] = totalQty > 0 ? totalCost / totalQty : 0;
+          }
+        } catch {}
+      }
+      return nonZero
+        .filter(b => !stablecoins.includes(b.asset))
+        .map(b => {
+          const qty = parseFloat(b.free) + parseFloat(b.locked);
+          return { sym: b.asset, name: b.asset, qty, avg: costBasis[b.asset] || 0, avgCurrency: "USD", sector: "Crypto", horizon: "Medium", priceType: "crypto", source: "binance" };
+        });
+    })() : Promise.resolve([]),
+    // Tiger
+    (TIGER_ID && TIGER_PRIVATE_KEY) ? (async () => {
+      const data = await tigerFetch("positions", { account: TIGER_LIVE_ACCOUNT, sec_type: "STK" });
+      const items = (data && data.items) || [];
+      return items.map(p => {
+        const isAU = (p.market || "").toUpperCase() === "AU";
+        const sym = isAU ? `${p.symbol}.AX` : p.symbol;
+        return { sym, name: p.symbol, qty: p.position || 0, avg: p.averageCost || 0, avgCurrency: isAU ? "AUD" : "USD", sector: "Unknown", horizon: "Medium", priceType: "stock", source: "tiger" };
+      });
+    })() : Promise.resolve([]),
+    // Ledger
+    (Array.isArray(ledgerAddresses) && ledgerAddresses.length > 0) ? (async () => {
+      const chainBalances = {};
+      for (const { address, chain } of ledgerAddresses) {
+        if (!address || !chain) continue;
+        const c = chain.toUpperCase();
+        let balance = 0;
+        try {
+          if (c === "BTC") {
+            const r = await fetch(`https://api.blockchair.com/bitcoin/dashboards/address/${address}`);
+            const d = await r.json();
+            const bal = d?.data?.[address]?.address?.balance;
+            if (bal != null) balance = bal / 1e8;
+          } else if (c === "ETH") {
+            const r = await fetch(`https://api.blockchair.com/ethereum/dashboards/address/${address}`);
+            const d = await r.json();
+            const bal = d?.data?.[address]?.address?.balance;
+            if (bal != null) balance = Number(bal) / 1e18;
+          } else if (c === "SOL") {
+            const r = await fetch("https://api.mainnet-beta.solana.com", {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getBalance", params: [address] }),
+            });
+            const d = await r.json();
+            if (d?.result?.value != null) balance = d.result.value / 1e9;
+          }
+        } catch {}
+        chainBalances[c] = (chainBalances[c] || 0) + balance;
+      }
+      const nameMap = { BTC: "Bitcoin", ETH: "Ethereum", SOL: "Solana" };
+      return Object.entries(chainBalances)
+        .filter(([, qty]) => qty > 0)
+        .map(([sym, qty]) => ({ sym, name: nameMap[sym] || sym, qty, avg: 0, avgCurrency: "USD", sector: "Crypto", horizon: "Medium", priceType: "crypto", source: "ledger" }));
+    })() : Promise.resolve([]),
+  ]);
+
+  // Merge all holdings + CMC client-side holdings
+  const allHoldings = [
+    ...(cbRes.status === "fulfilled" ? cbRes.value : []),
+    ...(bnRes.status === "fulfilled" ? bnRes.value : []),
+    ...(tgRes.status === "fulfilled" ? tgRes.value : []),
+    ...(ldRes.status === "fulfilled" ? ldRes.value : []),
+    ...(Array.isArray(cmcHoldings) ? cmcHoldings.map(h => ({ ...h, source: h.source || "cmc" })) : []),
+  ];
+
+  if (!allHoldings.length) return res.json({ holdings: [], prices: {}, audUsd, lastSync: new Date().toISOString() });
+
+  // Batch-fetch live prices
+  const uniqueSymbols = [...new Map(allHoldings.map(h => [h.sym, { sym: h.sym, type: h.priceType }])).values()];
+  const prices = {};
+  const cryptoSyms = uniqueSymbols.filter(s => s.type === "crypto");
+  const stockSyms = uniqueSymbols.filter(s => s.type !== "crypto");
+
+  if (cryptoSyms.length > 0) {
+    try {
+      const idMap = cryptoSyms.map(s => ({ sym: s.sym, id: COINGECKO_IDS[s.sym.toUpperCase()] || s.sym.toLowerCase() }));
+      const ids = idMap.map(x => x.id).join(",");
+      const r = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`, { headers: { "User-Agent": "Mozilla/5.0" } });
+      const d = await r.json();
+      for (const { sym, id } of idMap) {
+        if (d[id]) {
+          const price = d[id].usd;
+          const change = d[id].usd_24h_change || 0;
+          prices[sym] = { sym: sym.toUpperCase(), price, priceUSD: price, change: parseFloat(change.toFixed(2)), changeStr: (change >= 0 ? "+" : "") + change.toFixed(2) + "%", up: change >= 0, currency: "USD", source: "coingecko" };
+        }
+      }
+    } catch (e) { console.error("Combined: CoinGecko batch error:", e.message); }
+  }
+  if (stockSyms.length > 0) {
+    const results = await Promise.allSettled(stockSyms.map(async ({ sym }) => { try { return await fetchStockPrice(sym); } catch { return null; } }));
+    results.forEach((r, i) => { if (r.status === "fulfilled" && r.value && !r.value.error) prices[stockSyms[i].sym] = r.value; });
+  }
+
+  // Compute P&L per holding
+  const enriched = allHoldings.map(h => {
+    const priceData = prices[h.sym];
+    const livePrice = priceData?.price || 0;
+    const livePriceUSD = priceData?.priceUSD || livePrice;
+    const priceCurrency = priceData?.currency || "USD";
+
+    // Normalise avg cost to USD
+    let avgUSD = h.avg || 0;
+    if (h.avgCurrency === "AUD" && audUsd > 0) avgUSD = h.avg * audUsd;
+
+    // Value in USD
+    const valueUSD = h.qty * livePriceUSD;
+    const costUSD = h.qty * avgUSD;
+    const plUSD = avgUSD > 0 ? valueUSD - costUSD : 0;
+    const plPct = costUSD > 0 ? ((valueUSD - costUSD) / costUSD) * 100 : 0;
+
+    return {
+      ...h,
+      livePrice, livePriceUSD, priceCurrency,
+      valueUSD, costUSD, plUSD,
+      plPct: parseFloat(plPct.toFixed(2)),
+      change: priceData?.change || 0,
+      changeStr: priceData?.changeStr || "0.00%",
+      up: priceData?.up ?? true,
+    };
+  });
+
+  // Summary stats
+  const totalValue = enriched.reduce((s, h) => s + h.valueUSD, 0);
+  const totalCost = enriched.reduce((s, h) => s + h.costUSD, 0);
+  const totalPL = totalValue - totalCost;
+  const totalPLpct = totalCost > 0 ? ((totalValue - totalCost) / totalCost) * 100 : 0;
+
+  res.json({
+    holdings: enriched,
+    prices,
+    audUsd,
+    summary: {
+      totalValueUSD: totalValue,
+      totalCostUSD: totalCost,
+      totalPLusd: totalPL,
+      totalPLpct: parseFloat(totalPLpct.toFixed(2)),
+      holdingCount: enriched.length,
+      cryptoCount: enriched.filter(h => h.priceType === "crypto").length,
+      stockCount: enriched.filter(h => h.priceType === "stock").length,
+    },
+    sources: {
+      coinbase: cbRes.status === "fulfilled" ? "ok" : "error",
+      binance: bnRes.status === "fulfilled" ? "ok" : "error",
+      tiger: tgRes.status === "fulfilled" ? "ok" : "error",
+      ledger: ldRes.status === "fulfilled" ? "ok" : "error",
+    },
+    lastSync: new Date().toISOString(),
+  });
 });
 
 // ── Portfolio Performance History ──────────────────────────────────────────

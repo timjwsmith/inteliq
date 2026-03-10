@@ -1,0 +1,26 @@
+{
+  "short_name": "IntelIQ",
+  "name": "IntelIQ — Investment Intelligence",
+  "description": "AI-powered investment dashboard with live stock/crypto data, portfolio management, and trading",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/",
+  "display": "standalone",
+  "theme_color": "#120f1e",
+  "background_color": "#120f1e",
+  "orientation": "portrait-primary",
+  "scope": "/",
+  "categories": ["finance", "business"]
+}

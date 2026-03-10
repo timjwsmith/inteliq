@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+<body>
+<canvas id="c192" width="192" height="192"></canvas>
+<canvas id="c512" width="512" height="512"></canvas>
+<script>
+function draw(canvas) {
+  const ctx = canvas.getContext("2d");
+  const s = canvas.width;
+  const r = s * 0.15; // corner radius
+
+  // Background
+  ctx.fillStyle = "#120f1e";
+  ctx.beginPath();
+  ctx.roundRect(0, 0, s, s, r);
+  ctx.fill();
+
+  // "IQ" text
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  // Main text size
+  const fontSize = s * 0.38;
+  ctx.font = `900 ${fontSize}px -apple-system, sans-serif`;
+
+  // "I" in white
+  const text = "IQ";
+  const iqWidth = ctx.measureText(text).width;
+  const iWidth = ctx.measureText("I").width;
+  const startX = (s - iqWidth) / 2 + iWidth / 2;
+
+  ctx.fillStyle = "#ffffff";
+  ctx.fillText("I", startX, s * 0.45);
+
+  // "Q" in green
+  ctx.fillStyle = "#00e676";
+  ctx.fillText("Q", startX + iqWidth - ctx.measureText("Q").width / 2 - iWidth / 2, s * 0.45);
+
+  // Tagline
+  const tagSize = s * 0.065;
+  ctx.font = `600 ${tagSize}px -apple-system, sans-serif`;
+  ctx.fillStyle = "#00e67680";
+  ctx.letterSpacing = `${s * 0.02}px`;
+  ctx.fillText("INTELIQ", s / 2, s * 0.72);
+}
+
+draw(document.getElementById("c192"));
+draw(document.getElementById("c512"));
+
+// Auto-download
+["c192", "c512"].forEach(id => {
+  const canvas = document.getElementById(id);
+  const link = document.createElement("a");
+  link.download = `icon-${canvas.width}.png`;
+  link.href = canvas.toDataURL("image/png");
+  link.click();
+});
+</script>
+</body>
+</html>
