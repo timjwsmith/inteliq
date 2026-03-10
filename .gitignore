@@ -19,6 +19,13 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Xcode user data
+*.xcuserstate
+xcuserdata/
+
+# Personal portfolio data
+cmc_portfolio.csv
+
 # Private keys — NEVER commit
 *.pem
 

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="76" fill="#120f1e"/>
+  <text x="256" y="245" text-anchor="middle" dominant-baseline="central" font-family="-apple-system, Helvetica, Arial, sans-serif" font-weight="900" font-size="195" fill="#ffffff">I<tspan fill="#00e676">Q</tspan></text>
+  <text x="256" y="375" text-anchor="middle" font-family="-apple-system, Helvetica, Arial, sans-serif" font-weight="700" font-size="36" fill="#00e676" opacity="0.6" letter-spacing="8">INTELIQ</text>
+</svg>

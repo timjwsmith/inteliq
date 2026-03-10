@@ -6,6 +6,7 @@ RUN npm install
 COPY server.js ./
 COPY .env* ./
 COPY tiger_private_key.pem ./
+COPY cmc_portfolio.csv ./
 
 EXPOSE 3001
 CMD ["node", "server.js"]
