@@ -75,13 +75,16 @@ const css = `
 
   /* ── Mobile responsive ── */
   @media (max-width: 768px) {
-    .app-layout { flex-direction: column !important; }
+    html, body { overflow-x: hidden !important; width: 100% !important; }
+    .app-layout { flex-direction: column !important; min-height: 100vh !important; min-height: 100dvh !important; }
     .app-sidebar {
-      position: fixed !important; bottom: 0; left: 0; right: 0; top: auto !important;
+      position: fixed !important; bottom: 0 !important; left: 0 !important; right: 0 !important; top: auto !important;
       width: 100% !important; height: auto !important;
       flex-direction: row !important; padding: 0 !important;
       border-right: none !important; border-top: 1px solid var(--border) !important;
-      z-index: 999; overflow-x: auto; overflow-y: hidden;
+      z-index: 999; overflow: hidden;
+      background: var(--sidebar) !important;
+      padding-bottom: env(safe-area-inset-bottom, 0px) !important;
     }
     .app-sidebar .sidebar-header,
     .app-sidebar .sidebar-footer,
@@ -90,20 +93,27 @@ const css = `
     .app-sidebar nav {
       flex-direction: row !important; gap: 0 !important;
       width: 100%; justify-content: space-around; padding: 4px 0;
-      overflow-x: auto; flex-wrap: nowrap;
+      flex-wrap: nowrap;
     }
     .app-sidebar .nav-item {
-      flex-direction: column; gap: 2px !important; padding: 6px 8px !important;
-      font-size: 9px !important; min-width: 52px; text-align: center;
+      flex-direction: column; gap: 2px !important; padding: 6px 4px !important;
+      font-size: 9px !important; min-width: 0; flex: 1; text-align: center;
       justify-content: center; align-items: center;
       white-space: nowrap;
     }
     .app-sidebar .nav-item .nav-badge { display: none; }
     .app-sidebar .nav-item .nav-icon { font-size: 16px !important; }
     .app-main {
+      flex: 1 !important;
+      width: 100% !important; max-width: 100vw !important;
+      overflow-x: hidden !important;
       padding: 16px 12px 80px !important;
       padding-top: calc(env(safe-area-inset-top, 0px) + 16px) !important;
+      padding-bottom: calc(80px + env(safe-area-inset-bottom, 0px)) !important;
     }
+    .app-main * { max-width: 100% !important; }
+    .app-main canvas { max-width: 100% !important; }
+    .app-main input, .app-main button { max-width: 100% !important; }
     .card { border-radius: 10px !important; }
     .holding-row { padding: 12px 14px !important; border-radius: 10px !important; }
     .stat-card { padding: 14px !important; border-radius: 10px !important; }
@@ -114,13 +124,11 @@ const css = `
     .section-label { font-size: 9px !important; }
   }
   @media (max-width: 480px) {
-    .app-main { padding: 12px 8px 80px !important; }
+    .app-main { padding: 12px 8px !important;
+      padding-top: calc(env(safe-area-inset-top, 0px) + 12px) !important;
+      padding-bottom: calc(80px + env(safe-area-inset-bottom, 0px)) !important;
+    }
     .summary-grid { grid-template-columns: 1fr !important; }
-  }
-  /* safe area for notch devices & PWA standalone */
-  @supports (padding: env(safe-area-inset-bottom)) {
-    .app-sidebar { padding-bottom: env(safe-area-inset-bottom) !important; }
-    .app-main { padding-bottom: calc(80px + env(safe-area-inset-bottom)) !important; }
   }
   @media all and (display-mode: standalone) {
     .app-main { padding-top: calc(env(safe-area-inset-top, 48px) + 12px) !important; }
@@ -3173,7 +3181,7 @@ export default function App() {
     <GlossaryCtx.Provider value={{ allGlossary, openGlossary }}>
     <>
       <style>{css}</style>
-      <div className="app-layout" style={{ display:"flex", minHeight:"100vh", background:"var(--bg)" }}>
+      <div className="app-layout" style={{ display:"flex", minHeight:"100vh", background:"var(--bg)", overflow:"hidden", width:"100%" }}>
 
         {/* ── Sidebar ── */}
         <aside className="app-sidebar" style={{ width:220, background:"var(--sidebar)", borderRight:"1px solid var(--border)", padding:"20px 12px", display:"flex", flexDirection:"column", position:"sticky", top:0, height:"100vh", flexShrink:0 }}>
@@ -3222,7 +3230,7 @@ export default function App() {
         </aside>
 
         {/* ── Main ── */}
-        <main className="app-main" style={{ flex:1, padding:"32px 36px", overflowY:"auto", minWidth:0 }}>
+        <main className="app-main" style={{ flex:1, padding:"32px 36px", overflowY:"auto", overflowX:"hidden", minWidth:0, maxWidth:"100%" }}>
 
           {/* ══ DASHBOARD ══ */}
           {tab==="dashboard"&&(
