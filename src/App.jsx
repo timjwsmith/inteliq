@@ -72,6 +72,67 @@ const css = `
   .filter-btn.active { background:#00e67618; border-color:#00e67640; color:var(--green); }
   .epl-form-bar { display:flex; gap:4; justify-content:center; }
   .epl-prob { border-radius:6px; padding:4px 10px; font-size:11px; font-family:var(--ff-mono); font-weight:600; border:1px solid; }
+
+  /* ── Mobile responsive ── */
+  @media (max-width: 768px) {
+    html, body { overflow-x: hidden !important; width: 100% !important; }
+    .app-layout { flex-direction: column !important; min-height: 100vh !important; min-height: 100dvh !important; }
+    .app-sidebar {
+      position: fixed !important; bottom: 0 !important; left: 0 !important; right: 0 !important; top: auto !important;
+      width: 100% !important; height: auto !important;
+      flex-direction: row !important; padding: 0 !important;
+      border-right: none !important; border-top: 1px solid var(--border) !important;
+      z-index: 999; overflow: hidden;
+      background: var(--sidebar) !important;
+      padding-bottom: env(safe-area-inset-bottom, 0px) !important;
+    }
+    .app-sidebar .sidebar-header,
+    .app-sidebar .sidebar-footer,
+    .app-sidebar .sidebar-glossary,
+    .app-sidebar .sidebar-divider { display: none !important; }
+    .app-sidebar nav {
+      flex-direction: row !important; gap: 0 !important;
+      width: 100%; justify-content: space-around; padding: 4px 0;
+      flex-wrap: nowrap;
+    }
+    .app-sidebar .nav-item {
+      flex-direction: column; gap: 2px !important; padding: 6px 4px !important;
+      font-size: 9px !important; min-width: 0; flex: 1; text-align: center;
+      justify-content: center; align-items: center;
+      white-space: nowrap;
+    }
+    .app-sidebar .nav-item .nav-badge { display: none; }
+    .app-sidebar .nav-item .nav-icon { font-size: 16px !important; }
+    .app-main {
+      flex: 1 !important;
+      width: 100% !important; max-width: 100vw !important;
+      overflow-x: hidden !important;
+      padding: 16px 12px 80px !important;
+      padding-top: calc(env(safe-area-inset-top, 0px) + 16px) !important;
+      padding-bottom: calc(80px + env(safe-area-inset-bottom, 0px)) !important;
+    }
+    .app-main * { max-width: 100% !important; }
+    .app-main canvas { max-width: 100% !important; }
+    .app-main input, .app-main button { max-width: 100% !important; }
+    .card { border-radius: 10px !important; }
+    .holding-row { padding: 12px 14px !important; border-radius: 10px !important; }
+    .stat-card { padding: 14px !important; border-radius: 10px !important; }
+    h1 { font-size: 22px !important; }
+    .pick-grid { grid-template-columns: 1fr !important; }
+    .summary-grid { grid-template-columns: repeat(2, 1fr) !important; }
+    .alloc-grid { grid-template-columns: 1fr !important; }
+    .section-label { font-size: 9px !important; }
+  }
+  @media (max-width: 480px) {
+    .app-main { padding: 12px 8px !important;
+      padding-top: calc(env(safe-area-inset-top, 0px) + 12px) !important;
+      padding-bottom: calc(80px + env(safe-area-inset-bottom, 0px)) !important;
+    }
+    .summary-grid { grid-template-columns: 1fr !important; }
+  }
+  @media all and (display-mode: standalone) {
+    .app-main { padding-top: calc(env(safe-area-inset-top, 48px) + 12px) !important; }
+  }
 `;
 
 // ── Static data ────────────────────────────────────────────────────────────
@@ -379,10 +440,10 @@ function SummaryStrip({ holdings, livePrices, displayCcy, audUsd }) {
 
   return (
     <div style={{ marginBottom:24 }}>
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(5,1fr)", gap:12, marginBottom:12 }}>
+      <div className="summary-grid" style={{ display:"grid", gridTemplateColumns:"repeat(5,1fr)", gap:12, marginBottom:12 }}>
         {row1.map(m => <Card key={m.l} m={m} large />)}
       </div>
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:12 }}>
+      <div className="summary-grid" style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:12 }}>
         {row2.map(m => <Card key={m.l} m={m} />)}
       </div>
     </div>
@@ -1208,7 +1269,7 @@ function CMCImport({ onImport }) {
       <div className={`drop-zone${drag?" drag":""}`} onDragOver={e=>{e.preventDefault();setDrag(true);}} onDragLeave={()=>setDrag(false)} onDrop={e=>{e.preventDefault();setDrag(false);process(e.dataTransfer.files[0]);}} onClick={()=>ref.current?.click()}>
         <input ref={ref} type="file" accept=".csv" style={{display:"none"}} onChange={e=>process(e.target.files[0])}/>
         <div style={{fontSize:28,color:"var(--green)",marginBottom:10}}>↑</div>
-        <div style={{fontSize:14,fontWeight:700,color:"var(--text2)",fontFamily:"var(--ff-head)",marginBottom:5}}>{busy?"Importing…":"Drop your CMC Invest CSV here"}</div>
+        <div style={{fontSize:14,fontWeight:700,color:"var(--text2)",fontFamily:"var(--ff-head)",marginBottom:5}}>{busy?"Importing…":"Tap to select or drop your CMC CSV"}</div>
         <div style={{fontSize:12,color:"var(--muted2)"}}>Account → Reports → Portfolio Report → Download CSV</div>
       </div>
       {error && <div style={{marginTop:10,background:"#ff525212",border:"1px solid #ff525230",borderRadius:8,padding:"10px 14px",fontSize:12,color:"var(--red)"}}>{error}</div>}
@@ -2422,6 +2483,14 @@ export default function App() {
     try { return JSON.parse(localStorage.getItem("inteliq_cmc") || "[]"); } catch { return []; }
   });
 
+  // Auto-load CMC holdings from server if none in localStorage
+  useEffect(() => {
+    if (cmcHoldings.length > 0) return;
+    fetch("/api/cmc/holdings").then(r=>r.json()).then(h => {
+      if (h && h.length > 0) setCmc(h);
+    }).catch(()=>{});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Watchlist
   const [watchlist,setWatchlist] = useState(() => {
     try { return JSON.parse(localStorage.getItem("inteliq_watchlist") || "[]"); } catch { return []; }
@@ -3112,11 +3181,11 @@ export default function App() {
     <GlossaryCtx.Provider value={{ allGlossary, openGlossary }}>
     <>
       <style>{css}</style>
-      <div style={{ display:"flex", minHeight:"100vh", background:"var(--bg)" }}>
+      <div className="app-layout" style={{ display:"flex", minHeight:"100vh", background:"var(--bg)", overflow:"hidden", width:"100%" }}>
 
         {/* ── Sidebar ── */}
-        <aside style={{ width:220, background:"var(--sidebar)", borderRight:"1px solid var(--border)", padding:"20px 12px", display:"flex", flexDirection:"column", position:"sticky", top:0, height:"100vh", flexShrink:0 }}>
-          <div style={{ padding:"8px 8px 24px", borderBottom:"1px solid var(--border)", marginBottom:24 }}>
+        <aside className="app-sidebar" style={{ width:220, background:"var(--sidebar)", borderRight:"1px solid var(--border)", padding:"20px 12px", display:"flex", flexDirection:"column", position:"sticky", top:0, height:"100vh", flexShrink:0 }}>
+          <div className="sidebar-header" style={{ padding:"8px 8px 24px", borderBottom:"1px solid var(--border)", marginBottom:24 }}>
             <span style={{ fontFamily:"var(--ff-head)", fontSize:20, fontWeight:900, letterSpacing:"-0.03em", color:"var(--text2)" }}>
               INTEL<span style={{ color:"var(--green)" }}>IQ</span>
             </span>
@@ -3125,30 +3194,30 @@ export default function App() {
           <nav style={{ flex:1, display:"flex", flexDirection:"column", gap:4 }}>
             {TABS.map(t => (
               <button key={t.id} className={`nav-item${tab===t.id?" active":""}`} onClick={()=>setTab(t.id)}>
-                <span style={{ fontSize:14 }}>{t.icon}</span>
+                <span className="nav-icon" style={{ fontSize:14 }}>{t.icon}</span>
                 <span>{t.label}</span>
                 {t.id==="portfolio"&&allHoldings.length>0&&(
-                  <span style={{ marginLeft:"auto", background:"var(--green)20", color:"var(--green)", borderRadius:6, padding:"1px 7px", fontSize:10, fontFamily:"var(--ff-mono)", border:"1px solid var(--green)40" }}>{allHoldings.length}</span>
+                  <span className="nav-badge" style={{ marginLeft:"auto", background:"var(--green)20", color:"var(--green)", borderRadius:6, padding:"1px 7px", fontSize:10, fontFamily:"var(--ff-mono)", border:"1px solid var(--green)40" }}>{allHoldings.length}</span>
                 )}
                 {t.id==="watchlist"&&watchlist.length>0&&(
-                  <span style={{ marginLeft:"auto", background:"var(--blue)20", color:"var(--blue)", borderRadius:6, padding:"1px 7px", fontSize:10, fontFamily:"var(--ff-mono)", border:"1px solid var(--blue)40" }}>{watchlist.length}</span>
+                  <span className="nav-badge" style={{ marginLeft:"auto", background:"var(--blue)20", color:"var(--blue)", borderRadius:6, padding:"1px 7px", fontSize:10, fontFamily:"var(--ff-mono)", border:"1px solid var(--blue)40" }}>{watchlist.length}</span>
                 )}
                 {t.id==="calls"&&callRecords.length>0&&(
-                  <span style={{ marginLeft:"auto", background:"var(--purple)20", color:"var(--purple)", borderRadius:6, padding:"1px 7px", fontSize:10, fontFamily:"var(--ff-mono)", border:"1px solid var(--purple)40" }}>{callRecords.length}</span>
+                  <span className="nav-badge" style={{ marginLeft:"auto", background:"var(--purple)20", color:"var(--purple)", borderRadius:6, padding:"1px 7px", fontSize:10, fontFamily:"var(--ff-mono)", border:"1px solid var(--purple)40" }}>{callRecords.length}</span>
                 )}
               </button>
             ))}
-            <div style={{ borderTop:"1px solid var(--border)", margin:"8px 0 4px", paddingTop:8 }}>
+            <div className="sidebar-glossary" style={{ borderTop:"1px solid var(--border)", margin:"8px 0 4px", paddingTop:8 }}>
               <button className="nav-item" onClick={()=>openGlossary()} style={{ color:"var(--amber)", width:"100%" }}>
-                <span style={{ fontSize:14 }}>◈</span>
+                <span className="nav-icon" style={{ fontSize:14 }}>◈</span>
                 <span>Glossary</span>
                 {customTerms.length > 0 && (
-                  <span style={{ marginLeft:"auto", background:"var(--amber)20", color:"var(--amber)", borderRadius:6, padding:"1px 7px", fontSize:10, fontFamily:"var(--ff-mono)", border:"1px solid var(--amber)40" }}>{customTerms.length}</span>
+                  <span className="nav-badge" style={{ marginLeft:"auto", background:"var(--amber)20", color:"var(--amber)", borderRadius:6, padding:"1px 7px", fontSize:10, fontFamily:"var(--ff-mono)", border:"1px solid var(--amber)40" }}>{customTerms.length}</span>
                 )}
               </button>
             </div>
           </nav>
-          <div style={{ padding:"16px 8px 0", borderTop:"1px solid var(--border)", marginTop:16 }}>
+          <div className="sidebar-footer" style={{ padding:"16px 8px 0", borderTop:"1px solid var(--border)", marginTop:16 }}>
             <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
               <span style={{ width:7, height:7, borderRadius:"50%", background:"var(--green)", animation:"pulse 2s infinite" }}/>
               <div>
@@ -3161,7 +3230,7 @@ export default function App() {
         </aside>
 
         {/* ── Main ── */}
-        <main style={{ flex:1, padding:"32px 36px", overflowY:"auto", minWidth:0 }}>
+        <main className="app-main" style={{ flex:1, padding:"32px 36px", overflowY:"auto", overflowX:"hidden", minWidth:0, maxWidth:"100%" }}>
 
           {/* ══ DASHBOARD ══ */}
           {tab==="dashboard"&&(
@@ -3606,7 +3675,7 @@ export default function App() {
                     {cmcHoldings.length>0&&<button onClick={()=>setCmc([])} style={{background:"none",border:"1px solid var(--border)",borderRadius:8,padding:"6px 14px",fontSize:10,color:"var(--muted)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em"}}>CLEAR ALL</button>}
                   </div>
                   {cmcHoldings.length>0&&<SummaryStrip holdings={cmcHoldings} livePrices={livePrices} displayCcy={displayCcy} audUsd={audUsd}/>}
-                  <div style={{marginBottom:cmcHoldings.length>0?24:0}}><CMCImport onImport={h=>setCmc(h)}/></div>
+                  {cmcHoldings.length===0&&<div style={{marginBottom:0}}><CMCImport onImport={h=>setCmc(h)}/></div>}
                   {cmcHoldings.length>0&&(
                     <div style={{display:"grid",gap:8}}>
                       {cmcHoldings.map(h=>(
