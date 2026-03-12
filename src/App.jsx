@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, createContext, useContext } from "react";
+import { useState, useEffect, useRef, useCallback, createContext, useContext } from "react";
 
 // ── Fonts ──────────────────────────────────────────────────────────────────
 const fontLink = document.createElement("link");
@@ -73,8 +73,15 @@ const css = `
   .epl-form-bar { display:flex; gap:4; justify-content:center; }
   .epl-prob { border-radius:6px; padding:4px 10px; font-size:11px; font-family:var(--ff-mono); font-weight:600; border:1px solid; }
 
+  /* ── Mobile-only elements hidden on desktop ── */
+  .mobile-more-btn { display: none !important; }
+  @media (min-width: 769px) {
+    .mobile-more-overlay, .mobile-more-menu { display: none !important; }
+  }
+
   /* ── Mobile responsive ── */
   @media (max-width: 768px) {
+    .mobile-more-btn { display: flex !important; }
     html, body { overflow-x: hidden !important; width: 100% !important; }
     .app-layout { flex-direction: column !important; min-height: 100vh !important; min-height: 100dvh !important; }
     .app-sidebar {
@@ -99,10 +106,42 @@ const css = `
       flex-direction: column; gap: 2px !important; padding: 6px 4px !important;
       font-size: 9px !important; min-width: 0; flex: 1; text-align: center;
       justify-content: center; align-items: center;
-      white-space: nowrap;
+      white-space: nowrap; line-height: 1.2;
     }
     .app-sidebar .nav-item .nav-badge { display: none; }
-    .app-sidebar .nav-item .nav-icon { font-size: 16px !important; }
+    .app-sidebar .nav-item .nav-icon { font-size: 16px !important; display: block; margin: 0 auto 1px; }
+    .app-sidebar .nav-item .nav-label { display: block; }
+    .app-sidebar .nav-item.mobile-hidden { display: none !important; }
+    .mobile-more-overlay {
+      position: fixed; bottom: 0; left: 0; right: 0; top: 0;
+      background: rgba(0,0,0,0.6); z-index: 1000;
+    }
+    .mobile-more-menu {
+      position: fixed; bottom: calc(56px + env(safe-area-inset-bottom, 0px)); left: 8px; right: 8px;
+      background: var(--sidebar); border: 1px solid var(--border); border-radius: 16px;
+      padding: 16px; z-index: 1001;
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+    }
+    .mobile-more-menu button {
+      display: flex; flex-direction: column; align-items: center; gap: 4px;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+      padding: 12px 8px; color: var(--text2); font-size: 11px; font-family: var(--ff-head);
+    }
+    .mobile-more-menu button.active { border-color: var(--green); color: var(--green); }
+    .mobile-more-menu button .nav-icon { font-size: 18px; }
+    .pull-indicator {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 998;
+      display: flex; justify-content: center; align-items: center;
+      pointer-events: none; transition: transform 0.2s ease;
+    }
+    .pull-indicator-dot {
+      width: 32px; height: 32px; border-radius: 50%; background: var(--surface);
+      border: 2px solid var(--green); display: flex; align-items: center;
+      justify-content: center; font-size: 14px; color: var(--green);
+      box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+    }
+    .pull-indicator-dot.refreshing { animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
     .app-main {
       flex: 1 !important;
       width: 100% !important; max-width: 100vw !important;
@@ -111,9 +150,10 @@ const css = `
       padding-top: calc(env(safe-area-inset-top, 0px) + 16px) !important;
       padding-bottom: calc(80px + env(safe-area-inset-bottom, 0px)) !important;
     }
-    .app-main * { max-width: 100% !important; }
+    .app-main * { max-width: 100% !important; box-sizing: border-box !important; }
     .app-main canvas { max-width: 100% !important; }
     .app-main input, .app-main button { max-width: 100% !important; }
+    .fu2 { flex-wrap: wrap !important; }
     .card { border-radius: 10px !important; }
     .holding-row { padding: 12px 14px !important; border-radius: 10px !important; }
     .stat-card { padding: 14px !important; border-radius: 10px !important; }
@@ -122,6 +162,7 @@ const css = `
     .summary-grid { grid-template-columns: repeat(2, 1fr) !important; }
     .alloc-grid { grid-template-columns: 1fr !important; }
     .section-label { font-size: 9px !important; }
+    .coach-stats-grid { grid-template-columns: repeat(2, 1fr) !important; }
   }
   @media (max-width: 480px) {
     .app-main { padding: 12px 8px !important;
@@ -209,6 +250,9 @@ const TABS = [
   { id:"calls",     label:"Calls",     icon:"◐" },
   { id:"journal",   label:"Journal",   icon:"◫" },
 ];
+
+const MOBILE_BAR_IDS = ["dashboard","explorer","screener","portfolio","coach","watchlist"];
+const MOBILE_MORE_TABS = TABS.filter(t => !MOBILE_BAR_IDS.includes(t.id));
 
 const PORT_TABS = [
   { id:"all",      label:"All",        color:"var(--text2)" },
@@ -1078,7 +1122,7 @@ function HoldingRow({ holding, livePrice, expanded, onToggle, onRemove, onViewCh
             </div>
           </div>
         </div>
-        <div style={{ display:"flex", gap:24, alignItems:"center" }}>
+        <div style={{ display:"flex", gap:24, alignItems:"flex-start" }}>
           <div style={{ textAlign:"right" }}>
             <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:4 }}>VALUE ({displayCcy})</div>
             {dispValue != null
@@ -1090,8 +1134,8 @@ function HoldingRow({ holding, livePrice, expanded, onToggle, onRemove, onViewCh
           </div>
           <div style={{ textAlign:"right", minWidth:70 }}>
             <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:4 }}>P&L</div>
-            <div style={{ fontFamily:"var(--ff-mono)", fontSize:15, fontWeight:600, color:pnl.up?"var(--green)":"var(--red)" }}>{pnl.pct}</div>
-            {pnl.valid && holding.avg > 0 && dispPrice != null && dispAvg != null && (() => { const pnlDollar = holding.qty * (dispPrice - dispAvg); return <div style={{ fontSize:10, color:pnlDollar>=0?"var(--green)":"var(--red)", marginTop:2, fontFamily:"var(--ff-mono)" }}>{pnlDollar>=0?"+":"−"}{fmtMoney(Math.abs(pnlDollar), displayCcy)}</div>; })()}
+            {pnl.valid && holding.avg > 0 && dispPrice != null && dispAvg != null && (() => { const pnlDollar = holding.qty * (dispPrice - dispAvg); return <div style={{ fontFamily:"var(--ff-mono)", fontSize:15, fontWeight:600, color:pnlDollar>=0?"var(--green)":"var(--red)" }}>{pnlDollar>=0?"+":"−"}{fmtMoney(Math.abs(pnlDollar), displayCcy)}</div>; })()}
+            <div style={{ fontSize:10, color:pnl.up?"var(--green)":"var(--red)", marginTop:2, fontFamily:"var(--ff-mono)" }}>{pnl.pct}</div>
             {livePrice && <div style={{ fontSize:10, color:livePrice.up?"var(--green)":"var(--red)", marginTop:2, fontFamily:"var(--ff-mono)" }}>{livePrice.changeStr} today</div>}
           </div>
         </div>
@@ -1322,8 +1366,8 @@ function StockCard({ stock, expanded, onToggle, livePrices, displayCcy, audUsd, 
 
   return (
     <div className="card" style={{borderLeft:`3px solid ${accent}`,padding:22,marginBottom:10}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12}}>
-        <div style={{flex:1}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap"}}>
+        <div style={{flex:1,minWidth:0}}>
           <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6,flexWrap:"wrap"}}>
             <span style={{fontFamily:"var(--ff-head)",fontSize:20,fontWeight:800,color:"var(--text2)"}}>{stock.sym}</span>
             <span style={{fontSize:13,color:"var(--muted2)"}}>{stock.name}</span>
@@ -1335,7 +1379,7 @@ function StockCard({ stock, expanded, onToggle, livePrices, displayCcy, audUsd, 
           </div>
           <VerdictBadge v={stock.verdict}/>
         </div>
-        <div style={{textAlign:"right",flexShrink:0,minWidth:100}}>
+        <div style={{textAlign:"right",flexShrink:0}}>
           <div style={{fontFamily:"var(--ff-mono)",fontSize:20,fontWeight:600,color:"var(--text2)",marginBottom:3}}>{fmtMoney(dispPrice,displayCcy)}</div>
           {ld && !ld.error
             ? <div style={{fontFamily:"var(--ff-mono)",fontSize:12,color:ld.up?"var(--green)":"var(--red)"}}>{ld.changeStr}</div>
@@ -2430,6 +2474,39 @@ function GlossaryModal({ open, onClose, focusTerm, allGlossary }) {
 // ── Main App ───────────────────────────────────────────────────────────────
 export default function App() {
   const [tab,setTab]           = useState("dashboard");
+  const [mobileMore,setMobileMore] = useState(false);
+
+  // Pull-to-refresh for PWA
+  const [pullY, setPullY] = useState(0);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const pullStart = useRef(null);
+  const mainRef = useRef(null);
+  const isMobile = typeof window !== "undefined" && window.innerWidth <= 768;
+
+  const onTouchStart = useCallback((e) => {
+    if (!isMobile) return;
+    const el = mainRef.current;
+    if (el && el.scrollTop <= 0) pullStart.current = e.touches[0].clientY;
+    else pullStart.current = null;
+  }, [isMobile]);
+
+  const onTouchMove = useCallback((e) => {
+    if (pullStart.current === null || isRefreshing) return;
+    const dy = e.touches[0].clientY - pullStart.current;
+    if (dy > 0) setPullY(Math.min(dy * 0.4, 80));
+    else setPullY(0);
+  }, [isRefreshing]);
+
+  const onTouchEnd = useCallback(() => {
+    if (pullY > 60 && !isRefreshing) {
+      setIsRefreshing(true);
+      setPullY(50);
+      setTimeout(() => { window.location.reload(); }, 300);
+    } else {
+      setPullY(0);
+    }
+    pullStart.current = null;
+  }, [pullY, isRefreshing]);
   const [portTab,setPortTab]   = useState("all");
   const [expanded,setExp]      = useState(null);
   const [portExp,setPortExp]   = useState(null);
@@ -2482,10 +2559,10 @@ export default function App() {
   const [cmcHoldings,setCmc] = useState(() => {
     try { return JSON.parse(localStorage.getItem("inteliq_cmc") || "[]"); } catch { return []; }
   });
+  const [cmcReimport,setCmcReimport] = useState(false);
 
-  // Auto-load CMC holdings from server if none in localStorage
+  // Auto-load CMC holdings from server (always sync to pick up CSV updates)
   useEffect(() => {
-    if (cmcHoldings.length > 0) return;
     fetch("/api/cmc/holdings").then(r=>r.json()).then(h => {
       if (h && h.length > 0) setCmc(h);
     }).catch(()=>{});
@@ -2626,7 +2703,7 @@ export default function App() {
   // Fetch live prices whenever holdings, watchlist, or dashboard picks change
   useEffect(() => {
     const all = [
-      ...cbHoldings, ...bnHoldings, ...ldgHoldings, ...cmcHoldings,
+      ...cbHoldings, ...bnHoldings, ...tigerHoldings, ...ldgHoldings, ...cmcHoldings,
       ...dashPicks.map(s => ({ sym:s.sym, priceType:s.priceType })),
       ...watchlist.map(w => ({ sym:w.sym, priceType:w.priceType })),
       ...callRecords.map(c => ({ sym:c.sym, priceType:c.priceType || "stock" })),
@@ -2635,7 +2712,7 @@ export default function App() {
     if (!unique.length) return;
     fetch("/api/prices", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({symbols:unique}) })
       .then(r=>r.json()).then(d=>setLP(p=>({...p,...d}))).catch(()=>{});
-  }, [cbHoldings,bnHoldings,ldgHoldings,cmcHoldings,dashPicks,watchlist]);
+  }, [cbHoldings,bnHoldings,tigerHoldings,ldgHoldings,cmcHoldings,dashPicks,watchlist]);
 
   // Patch call records: fix null/zero prices, currency mismatches, or Claude's bad estimates for recent calls
   useEffect(() => {
@@ -2906,7 +2983,8 @@ export default function App() {
       const r = await fetch(`/api/chart/${encodeURIComponent(sym)}?range=${range}&currency=${displayCcy}`);
       const d = await r.json();
       if (!d.error) { setChartData(d); if (!skipAnalysis) fetchDetailAnalysis(d); }
-    } catch {}
+      else console.error("Chart error:", d.error);
+    } catch (err) { console.error("Chart fetch failed:", err); }
     setChartLoading(false);
   }
 
@@ -2979,8 +3057,8 @@ export default function App() {
       // Stream analysis for faster perceived response
       const streamRes = await fetch("/api/analyse/stream", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({
         model:"claude-sonnet-4-20250514", max_tokens:1000,
-        system:`You are a senior investment analyst. Today is ${today}. Your training knowledge has a cutoff of approximately mid-2025 — do NOT present specific metrics from your training data (e.g. ETF flow volumes, exact hash rates, specific institutional inflow figures, dated earnings numbers) as if they are current facts for ${today}. For fundamentals, focus on structural and qualitative factors. If you cite a specific metric that may have changed, frame it as approximate or add "as of mid-2025". All macro commentary must reflect conditions as of ${today} — do not reference past rate decisions or events as if they are upcoming. For crypto assets (BTC, ETH, SOL etc) analyse the native coin/token directly — do NOT substitute an ETF or trust product. Respond ONLY with valid JSON, no markdown:
-{"sym":"TICKER","name":"Full name","sector":"sector","verdict":"BUY|WATCH|AVOID|HOLD","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","priceStatic":123.45,"target":"$X","upside":"+X%","up":true,"priceType":"stock or crypto","avgCurrency":"USD or AUD","priceCurrency":"USD or AUD","summary":"2-3 sentences","macro":"2-3 sentences","fundamental":"2-3 sentences","technical":"2-3 sentences","sentiment":"2-3 sentences","insider":"2-3 sentences","portfolio":"2-3 sentences"}`,
+        system:`You are a senior investment analyst. Today is ${today}. Your training knowledge has a cutoff of approximately mid-2025 — do NOT present specific metrics from your training data (e.g. ETF flow volumes, exact hash rates, specific institutional inflow figures, dated earnings numbers) as if they are current facts for ${today}. For fundamentals, focus on structural and qualitative factors. If you cite a specific metric that may have changed, frame it as approximate or add "as of mid-2025". All macro commentary must reflect conditions as of ${today} — do not reference past rate decisions or events as if they are upcoming. For crypto assets (BTC, ETH, SOL etc) analyse the native coin/token directly — do NOT substitute an ETF or trust product. IMPORTANT: set priceStatic to 0 — the live price will be injected separately. Target price must be in the stock's native trading currency (AUD for ASX .AX stocks, USD for US stocks). Respond ONLY with valid JSON, no markdown:
+{"sym":"TICKER","name":"Full name","sector":"sector","verdict":"BUY|WATCH|AVOID|HOLD","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","priceStatic":0,"target":"$X","upside":"+X%","up":true,"priceType":"stock or crypto","avgCurrency":"USD or AUD","priceCurrency":"USD or AUD","summary":"2-3 sentences","macro":"2-3 sentences","fundamental":"2-3 sentences","technical":"2-3 sentences","sentiment":"2-3 sentences","insider":"2-3 sentences","portfolio":"2-3 sentences"}`,
         messages:[{role:"user",content:`Analyse this investment: ${q}.${livePriceCtx}${fundamentalsCtx}`}]
       })});
       const reader = streamRes.body.getReader();
@@ -3050,7 +3128,10 @@ export default function App() {
         { ...parsed, analysedAt: new Date().toISOString() },
         ...prev.filter(h => h.sym !== parsed.sym)
       ].slice(0, 10));
-      fetch(`/api/price?sym=${parsed.sym}&type=${parsed.priceType}`).then(r=>r.json()).then(d=>setLP(p=>({...p,[parsed.sym]:d}))).catch(()=>{});
+      fetch(`/api/price?sym=${parsed.sym}&type=${parsed.priceType}`).then(r=>r.json()).then(d=>{
+        setLP(p=>({...p,[parsed.sym]:d}));
+        if(d?.price) setResult(prev=>prev?{...prev,priceStatic:d.price,priceCurrency:d.currency||prev.priceCurrency}:prev);
+      }).catch(()=>{});
     } catch { setSearchErr("Analysis failed — please try again."); setSearchStatus(null); }
     setSearching(false);
   }
@@ -3193,9 +3274,9 @@ export default function App() {
           </div>
           <nav style={{ flex:1, display:"flex", flexDirection:"column", gap:4 }}>
             {TABS.map(t => (
-              <button key={t.id} className={`nav-item${tab===t.id?" active":""}`} onClick={()=>setTab(t.id)}>
+              <button key={t.id} className={`nav-item${tab===t.id?" active":""}${!MOBILE_BAR_IDS.includes(t.id)?" mobile-hidden":""}`} onClick={()=>{setTab(t.id);setMobileMore(false);}}>
                 <span className="nav-icon" style={{ fontSize:14 }}>{t.icon}</span>
-                <span>{t.label}</span>
+                <span className="nav-label">{t.label}</span>
                 {t.id==="portfolio"&&allHoldings.length>0&&(
                   <span className="nav-badge" style={{ marginLeft:"auto", background:"var(--green)20", color:"var(--green)", borderRadius:6, padding:"1px 7px", fontSize:10, fontFamily:"var(--ff-mono)", border:"1px solid var(--green)40" }}>{allHoldings.length}</span>
                 )}
@@ -3207,6 +3288,10 @@ export default function App() {
                 )}
               </button>
             ))}
+            <button className={`nav-item mobile-more-btn${MOBILE_MORE_TABS.some(t=>t.id===tab)?" active":""}`} onClick={()=>setMobileMore(m=>!m)}>
+              <span className="nav-icon" style={{ fontSize:14 }}>⋯</span>
+              <span className="nav-label">More</span>
+            </button>
             <div className="sidebar-glossary" style={{ borderTop:"1px solid var(--border)", margin:"8px 0 4px", paddingTop:8 }}>
               <button className="nav-item" onClick={()=>openGlossary()} style={{ color:"var(--amber)", width:"100%" }}>
                 <span className="nav-icon" style={{ fontSize:14 }}>◈</span>
@@ -3229,8 +3314,35 @@ export default function App() {
           </div>
         </aside>
 
+        {/* ── Mobile More Menu ── */}
+        {mobileMore && (
+          <>
+            <div className="mobile-more-overlay" onClick={()=>setMobileMore(false)}/>
+            <div className="mobile-more-menu">
+              {MOBILE_MORE_TABS.map(t => (
+                <button key={t.id} className={tab===t.id?"active":""} onClick={()=>{setTab(t.id);setMobileMore(false);}}>
+                  <span className="nav-icon">{t.icon}</span>
+                  <span>{t.label}</span>
+                </button>
+              ))}
+              <button className={false?"active":""} onClick={()=>{openGlossary();setMobileMore(false);}}>
+                <span className="nav-icon" style={{color:"var(--amber)"}}>◈</span>
+                <span>Glossary</span>
+              </button>
+            </div>
+          </>
+        )}
+
         {/* ── Main ── */}
-        <main className="app-main" style={{ flex:1, padding:"32px 36px", overflowY:"auto", overflowX:"hidden", minWidth:0, maxWidth:"100%" }}>
+        {/* Pull-to-refresh indicator */}
+        {pullY > 0 && (
+          <div className="pull-indicator" style={{ transform: `translateY(${pullY - 32}px)` }}>
+            <div className={`pull-indicator-dot${isRefreshing?" refreshing":""}`}>{isRefreshing ? "↻" : "↓"}</div>
+          </div>
+        )}
+
+        <main ref={mainRef} className="app-main" style={{ flex:1, padding:"32px 36px", overflowY:"auto", overflowX:"hidden", minWidth:0, maxWidth:"100%" }}
+          onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}>
 
           {/* ══ DASHBOARD ══ */}
           {tab==="dashboard"&&(
@@ -3672,8 +3784,12 @@ export default function App() {
                       <span style={{fontSize:13,fontFamily:"var(--ff-head)",fontWeight:700,color:"var(--blue)"}}>CMC Invest</span>
                       {cmcHoldings.length>0&&<span style={{fontSize:11,fontFamily:"var(--ff-mono)",color:"var(--muted2)"}}>{cmcHoldings.length} positions</span>}
                     </div>
-                    {cmcHoldings.length>0&&<button onClick={()=>setCmc([])} style={{background:"none",border:"1px solid var(--border)",borderRadius:8,padding:"6px 14px",fontSize:10,color:"var(--muted)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em"}}>CLEAR ALL</button>}
+                    {cmcHoldings.length>0&&<div style={{display:"flex",gap:8}}>
+                      <button onClick={()=>setCmcReimport(p=>!p)} style={{background:"none",border:"1px solid var(--border)",borderRadius:8,padding:"6px 14px",fontSize:10,color:cmcReimport?"var(--green)":"var(--muted)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em"}}>{cmcReimport?"CANCEL":"RE-IMPORT"}</button>
+                      <button onClick={()=>{setCmc([]);setCmcReimport(false);}} style={{background:"none",border:"1px solid var(--border)",borderRadius:8,padding:"6px 14px",fontSize:10,color:"var(--muted)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em"}}>CLEAR ALL</button>
+                    </div>}
                   </div>
+                  {cmcHoldings.length>0&&cmcReimport&&<div style={{marginBottom:14}}><CMCImport onImport={h=>{setCmc(h);setCmcReimport(false);}}/></div>}
                   {cmcHoldings.length>0&&<SummaryStrip holdings={cmcHoldings} livePrices={livePrices} displayCcy={displayCcy} audUsd={audUsd}/>}
                   {cmcHoldings.length===0&&<div style={{marginBottom:0}}><CMCImport onImport={h=>setCmc(h)}/></div>}
                   {cmcHoldings.length>0&&(
@@ -3980,7 +4096,7 @@ export default function App() {
                 return (
                   <div className="fi">
                     {/* Stats strip */}
-                    <div className="fu" style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:20}}>
+                    <div className="coach-stats-grid" style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:20}}>
                       <div className="stat-card" style={{borderTop:`3px solid ${gradeColor}`}}>
                         <div style={{fontSize:9,fontFamily:"var(--ff-mono)",color:"var(--muted)",letterSpacing:"0.12em",marginBottom:8}}>PORTFOLIO GRADE</div>
                         <div style={{fontSize:40,fontFamily:"var(--ff-head)",fontWeight:900,color:gradeColor,lineHeight:1}}>{coachReport.grade}</div>

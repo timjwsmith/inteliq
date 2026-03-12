@@ -11,6 +11,7 @@ final class PortfolioVM {
 
     // Filter
     var selectedSource: String? // nil = all
+    var displayCurrency: String = "USD" // USD or AUD
 
     var filteredHoldings: [Holding] {
         guard let source = selectedSource else { return holdings }
@@ -19,6 +20,15 @@ final class PortfolioVM {
 
     var availableSources: [String] {
         Array(Set(holdings.map(\.source))).sorted()
+    }
+
+    // Currency conversion helpers
+    var currencyMultiplier: Double {
+        displayCurrency == "AUD" && audUsd > 0 ? 1.0 / audUsd : 1.0
+    }
+
+    var currencySymbol: String {
+        displayCurrency == "AUD" ? "A$" : "$"
     }
 
     func load() async {

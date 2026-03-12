@@ -598,23 +598,35 @@ app.get("/api/tiger/balances", async (req, res) => {
     return res.status(503).json({ error: "Tiger API not configured — add TIGER_ID and private key to .env" });
   }
   try {
-    const data = await tigerFetch("positions", { account: TIGER_LIVE_ACCOUNT, sec_type: "STK" });
+    const raw = await tigerFetch("positions", { account: TIGER_LIVE_ACCOUNT });
+    const data = typeof raw === "string" ? JSON.parse(raw) : raw;
     const items = (data && data.items) || [];
     const holdings = items.map(p => {
       const isAU = (p.market || "").toUpperCase() === "AU";
-      const sym = isAU ? `${p.symbol}.AX` : p.symbol;
+      const sym = isAU ? `${p.symbol.replace(/\.AU$/, "")}.AX` : p.symbol;
       return {
         sym,
-        name: p.symbol,
+        name: p.name || p.symbol,
         qty: p.position || 0,
         avg: p.averageCost || 0,
         avgCurrency: isAU ? "AUD" : "USD",
+        priceCurrency: isAU ? "AUD" : "USD",
         sector: "Unknown",
         horizon: "Medium",
         priceType: "stock",
         source: "tiger",
       };
     });
+    // Enrich with sector from FMP profile
+    if (FMP_API_KEY && holdings.length > 0) {
+      await Promise.allSettled(holdings.map(async h => {
+        try {
+          const r = await fetch(`https://financialmodelingprep.com/stable/profile?symbol=${h.sym}&apikey=${FMP_API_KEY}`);
+          const d = await r.json();
+          if (d?.[0]?.sector) h.sector = d[0].sector;
+        } catch {}
+      }));
+    }
     console.log(`Tiger: fetched ${holdings.length} positions`);
     res.json({ holdings, lastSync: new Date().toISOString() });
   } catch (err) {
@@ -1630,6 +1642,7 @@ app.post("/api/screener", async (req, res) => {
         model: "claude-sonnet-4-20250514", max_tokens: 2000, temperature: 0.3,
         system: `You are a senior investment analyst running a stock screener. Today is ${today}. The user has described what they are looking for in plain English. Return 5–7 stocks that best match their criteria as of today. Be specific and current — pick stocks that genuinely fit right now, not generic examples. ASX tickers must end in .AX. Return ONLY a valid JSON array with no markdown, no preamble, no explanation — just the raw JSON array:
 [{"sym":"TICKER","name":"Full Company Name","sector":"Sector","verdict":"BUY|WATCH|AVOID|HOLD","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","priceStatic":0.00,"target":"$X","upside":"+X%","up":true,"priceType":"stock or crypto","priceCurrency":"USD or AUD","avgCurrency":"USD or AUD","matchReason":"2-3 sentences on exactly why this matches the screen criteria","summary":"2-3 sentences on the investment thesis"}]
+IMPORTANT: target price MUST be in the stock's native trading currency (AUD for ASX .AX stocks, USD for US stocks). The target must be realistic relative to the current price and consistent with your verdict (BUY targets must be ABOVE the current price).
 Horizon definitions: Short = up to 3 months; Medium = 3 months to 1 year; Long = 1 year or more.`,
         messages: [
           { role:"user", content: `Screen for: ${query}` },
@@ -1786,12 +1799,13 @@ app.post("/api/portfolio/combined", async (req, res) => {
     })() : Promise.resolve([]),
     // Tiger
     (TIGER_ID && TIGER_PRIVATE_KEY) ? (async () => {
-      const data = await tigerFetch("positions", { account: TIGER_LIVE_ACCOUNT, sec_type: "STK" });
-      const items = (data && data.items) || [];
+      const raw = await tigerFetch("positions", { account: TIGER_LIVE_ACCOUNT });
+      const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+      const items = (parsed && parsed.items) || [];
       return items.map(p => {
         const isAU = (p.market || "").toUpperCase() === "AU";
-        const sym = isAU ? `${p.symbol}.AX` : p.symbol;
-        return { sym, name: p.symbol, qty: p.position || 0, avg: p.averageCost || 0, avgCurrency: isAU ? "AUD" : "USD", sector: "Unknown", horizon: "Medium", priceType: "stock", source: "tiger" };
+        const sym = isAU ? `${p.symbol.replace(/\.AU$/, "")}.AX` : p.symbol;
+        return { sym, name: p.name || p.symbol, qty: p.position || 0, avg: p.averageCost || 0, avgCurrency: isAU ? "AUD" : "USD", priceCurrency: isAU ? "AUD" : "USD", sector: "Unknown", horizon: "Medium", priceType: "stock", source: "tiger" };
       });
     })() : Promise.resolve([]),
     // Ledger
