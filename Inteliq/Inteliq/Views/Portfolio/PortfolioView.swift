@@ -9,14 +9,32 @@ struct PortfolioView: View {
             VStack(alignment: .leading, spacing: Theme.paddingMd) {
                 LogoHeader()
 
+                // Currency toggle
+                HStack(spacing: 0) {
+                    ForEach(["USD", "AUD"], id: \.self) { ccy in
+                        Button {
+                            vm.displayCurrency = ccy
+                        } label: {
+                            Text(ccy)
+                                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                .foregroundStyle(vm.displayCurrency == ccy ? Theme.bg : Theme.textMuted)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 6)
+                                .background(vm.displayCurrency == ccy ? Theme.green : Color.clear)
+                        }
+                    }
+                }
+                .background(Theme.card)
+                .clipShape(Capsule())
+
                 // Summary strip
                 if let s = vm.summary {
-                    SummaryStrip(summary: s, audUsd: vm.audUsd)
+                    SummaryStrip(summary: s, audUsd: vm.audUsd, currency: vm.displayCurrency, multiplier: vm.currencyMultiplier, symbol: vm.currencySymbol)
                 }
 
-                // Source filter tabs (always visible, tappable)
+                // Source filter tabs
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
+                    HStack(spacing: 6) {
                         SourceTab(
                             label: "All",
                             count: vm.holdings.count,
@@ -89,7 +107,7 @@ struct PortfolioView: View {
                     .frame(maxWidth: .infinity, minHeight: 150)
                 } else {
                     ForEach(vm.filteredHoldings) { holding in
-                        HoldingRow(holding: holding)
+                        HoldingRow(holding: holding, multiplier: vm.currencyMultiplier, symbol: vm.currencySymbol)
                     }
                 }
             }
@@ -135,23 +153,23 @@ struct SourceTab: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 5) {
+            HStack(spacing: 4) {
                 if let status {
                     Circle()
                         .fill(status == "ok" ? Theme.green : Theme.red.opacity(0.6))
                         .frame(width: 6, height: 6)
                 }
                 Text(label)
-                    .font(Theme.caption)
-                    .fontWeight(isSelected ? .semibold : .regular)
+                    .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
+                    .lineLimit(1)
                 if count > 0 {
                     Text("\(count)")
-                        .font(.system(size: 10, weight: .medium))
+                        .font(.system(size: 9, weight: .medium))
                         .foregroundStyle(isSelected ? Theme.green : Theme.textMuted)
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
             .background(isSelected ? Theme.green.opacity(0.2) : Theme.card)
             .foregroundStyle(isSelected ? Theme.green : Theme.textSecondary)
             .clipShape(Capsule())
@@ -164,12 +182,15 @@ struct SourceTab: View {
 struct SummaryStrip: View {
     let summary: PortfolioSummary
     let audUsd: Double
+    var currency: String = "USD"
+    var multiplier: Double = 1.0
+    var symbol: String = "$"
 
     var body: some View {
         VStack(spacing: 12) {
             HStack {
-                StatBox(label: "TOTAL", value: summary.totalValueUsd.asCurrency())
-                StatBox(label: "P&L", value: summary.totalPlUsd.asCurrency(), color: summary.totalPlUsd >= 0 ? Theme.green : Theme.red)
+                StatBox(label: "TOTAL", value: "\(symbol)\(formatNum(summary.totalValueUsd * multiplier))")
+                StatBox(label: "P&L", value: "\(symbol)\(formatNum(summary.totalPlUsd * multiplier))", color: summary.totalPlUsd >= 0 ? Theme.green : Theme.red)
                 StatBox(label: "RETURN", value: String(format: "%+.1f%%", summary.totalPlPct), color: summary.totalPlPct >= 0 ? Theme.green : Theme.red)
             }
             HStack {
@@ -179,6 +200,14 @@ struct SummaryStrip: View {
             }
         }
         .cardStyle()
+    }
+
+    private func formatNum(_ v: Double) -> String {
+        let fmt = NumberFormatter()
+        fmt.numberStyle = .decimal
+        fmt.maximumFractionDigits = 2
+        fmt.minimumFractionDigits = 2
+        return fmt.string(from: NSNumber(value: abs(v))) ?? "0.00"
     }
 }
 
@@ -196,6 +225,8 @@ struct StatBox: View {
             Text(value)
                 .font(Theme.mono)
                 .foregroundStyle(color)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
         }
         .frame(maxWidth: .infinity)
     }
@@ -205,6 +236,8 @@ struct StatBox: View {
 
 struct HoldingRow: View {
     let holding: Holding
+    var multiplier: Double = 1.0
+    var symbol: String = "$"
     @State private var showTrade = false
 
     var body: some View {
@@ -234,14 +267,11 @@ struct HoldingRow: View {
                 Spacer()
 
                 VStack(alignment: .trailing, spacing: 4) {
-                    Text(holding.displayValue.asCurrency())
+                    Text("\(symbol)\(formatNum(holding.displayValue * multiplier))")
                         .font(Theme.mono)
                         .foregroundStyle(Theme.textPrimary)
                     HStack(spacing: 4) {
-                        Text(String(format: "%+.2f", holding.displayPL))
-                            .font(Theme.caption)
-                            .foregroundStyle(holding.displayPL >= 0 ? Theme.green : Theme.red)
-                        Text("(\(String(format: "%+.1f%%", holding.displayPLpct)))")
+                        Text(String(format: "%+.1f%%", holding.displayPLpct))
                             .font(Theme.caption)
                             .foregroundStyle(holding.displayPL >= 0 ? Theme.green : Theme.red)
                     }
@@ -278,6 +308,14 @@ struct HoldingRow: View {
                 livePrice: holding.livePrice
             )
         }
+    }
+
+    private func formatNum(_ v: Double) -> String {
+        let fmt = NumberFormatter()
+        fmt.numberStyle = .decimal
+        fmt.maximumFractionDigits = 2
+        fmt.minimumFractionDigits = 2
+        return fmt.string(from: NSNumber(value: abs(v))) ?? "0.00"
     }
 }
 
