@@ -1,12 +1,19 @@
 FROM node:20-alpine
 
+# Native build tools for better-sqlite3
+RUN apk add --no-cache python3 make g++
+
 WORKDIR /app
 COPY server-package.json ./package.json
 RUN npm install
-COPY server.js ./
+
+COPY server.js db.js auth.js user-data.js ./
 COPY .env* ./
 COPY tiger_private_key.pem ./
 COPY cmc_portfolio.csv ./
+
+# Data directory for SQLite (mount as volume for persistence)
+RUN mkdir -p /data
 
 EXPOSE 3001
 CMD ["node", "server.js"]

@@ -30,7 +30,7 @@ const css = `
     --ff-mono: 'DM Mono', monospace;
   }
   html,body,#root { height:100%; }
-  body { background:var(--bg); color:var(--text); font-family:var(--ff-body); -webkit-font-smoothing:antialiased; }
+  body { background:var(--sidebar); color:var(--text); font-family:var(--ff-body); -webkit-font-smoothing:antialiased; }
   ::-webkit-scrollbar { width:4px; }
   ::-webkit-scrollbar-track { background:var(--bg); }
   ::-webkit-scrollbar-thumb { background:var(--border2); border-radius:4px; }
@@ -82,7 +82,7 @@ const css = `
   /* ── Mobile responsive ── */
   @media (max-width: 768px) {
     .mobile-more-btn { display: flex !important; }
-    html, body { overflow-x: hidden !important; width: 100% !important; }
+    html, body { overflow-x: hidden !important; width: 100% !important; max-width: 100% !important; }
     .app-layout { flex-direction: column !important; min-height: 100vh !important; min-height: 100dvh !important; }
     .app-sidebar {
       position: fixed !important; bottom: 0 !important; left: 0 !important; right: 0 !important; top: auto !important;
@@ -91,7 +91,6 @@ const css = `
       border-right: none !important; border-top: 1px solid var(--border) !important;
       z-index: 999; overflow: hidden;
       background: var(--sidebar) !important;
-      padding-bottom: env(safe-area-inset-bottom, 0px) !important;
     }
     .app-sidebar .sidebar-header,
     .app-sidebar .sidebar-footer,
@@ -99,7 +98,7 @@ const css = `
     .app-sidebar .sidebar-divider { display: none !important; }
     .app-sidebar nav {
       flex-direction: row !important; gap: 0 !important;
-      width: 100%; justify-content: space-around; padding: 4px 0;
+      width: 100%; justify-content: space-evenly; padding: 6px 2px 2px;
       flex-wrap: nowrap;
     }
     .app-sidebar .nav-item {
@@ -153,7 +152,7 @@ const css = `
     .app-main * { max-width: 100% !important; box-sizing: border-box !important; }
     .app-main canvas { max-width: 100% !important; }
     .app-main input, .app-main button { max-width: 100% !important; }
-    .fu2 { flex-wrap: wrap !important; }
+    .fu2 { flex-wrap: nowrap !important; }
     .card { border-radius: 10px !important; }
     .holding-row { padding: 12px 14px !important; border-radius: 10px !important; }
     .stat-card { padding: 14px !important; border-radius: 10px !important; }
@@ -249,6 +248,7 @@ const TABS = [
   { id:"ipo",       label:"IPO",       icon:"◆" },
   { id:"calls",     label:"Calls",     icon:"◐" },
   { id:"journal",   label:"Journal",   icon:"◫" },
+  { id:"indices",   label:"Indices",   icon:"◳" },
 ];
 
 const MOBILE_BAR_IDS = ["dashboard","explorer","screener","portfolio","coach","watchlist"];
@@ -268,9 +268,13 @@ function parseCMCcsv(text) {
   const lines = text.trim().split(/\r?\n/);
   if (lines.length < 2) throw new Error("Empty CSV");
   const headers = lines[0].replace(/^\uFEFF/, "").split(",").map(h => h.replace(/"/g, "").trim());
-  const idx = n => headers.findIndex(h => h === n);
+  const idx  = n => headers.findIndex(h => h === n);
+  const idxi = (...names) => { for (const n of names) { const i = headers.findIndex(h => h.toLowerCase() === n.toLowerCase()); if (i !== -1) return i; } return -1; };
   const iCode = idx("Security Code"), iSector = idx("Sector"), iName = idx("Company Name");
   const iQty  = idx("Quantity"),       iAvg    = idx("Average Cost $");
+  const iDivC = idxi("Current Dividend c","Dividend (c)","Dividend c","Current Div c","Div (c)");
+  const iDivY = idxi("Dividend yield %","Dividend Yield %","Dividend Yield","Yield %","Div Yield %");
+  const iFrank= idxi("Franking %","Franking","Franking Pct","Frank %");
   if (iCode === -1 || iQty === -1 || iAvg === -1)
     throw new Error("Unrecognised format — expected CMC Invest Portfolio Report CSV");
 
@@ -295,12 +299,16 @@ function parseCMCcsv(text) {
     let sym = rawCode.replace(/:US$/i, "").trim();
     if (!isUS && !sym.endsWith(".AX")) sym += ".AX";
 
+    const divCents   = iDivC  !== -1 ? parseFloat(cols[iDivC])  || 0 : 0;
+    const divYieldPct= iDivY  !== -1 ? parseFloat(cols[iDivY])  || 0 : 0;
+    const frankingPct= iFrank !== -1 ? parseFloat(cols[iFrank]) || 0 : 0;
     holdings.push({
       sym, name: cols[iName] || sym, qty,
       avg: avgAUD, avgCurrency: "AUD",
       priceCurrency: isUS ? "USD" : "AUD",
       sector: cols[iSector] || "Unknown",
       horizon: "Medium", priceType: "stock", source: "cmc", rawCode,
+      divCents, divYieldPct, frankingPct,
     });
   }
   if (!holdings.length) throw new Error("No valid holdings found in CSV");
@@ -386,7 +394,7 @@ function LinkedText({ children }) {
 
 // ── Atoms ──────────────────────────────────────────────────────────────────
 function VerdictBadge({ v }) {
-  const m = { BUY:{bg:"#00e67620",c:"#00e676",b:"#00e67640"}, WATCH:{bg:"#ffab4020",c:"#ffab40",b:"#ffab4040"}, AVOID:{bg:"#ff525220",c:"#ff5252",b:"#ff525240"}, SELL:{bg:"#ff525220",c:"#ff5252",b:"#ff525240"}, HOLD:{bg:"#ffffff10",c:"#a89ec0",b:"#3d3760"} };
+  const m = { BUY:{bg:"#00e67620",c:"#00e676",b:"#00e67640"}, WATCH:{bg:"#ffab4020",c:"#ffab40",b:"#ffab4040"}, AVOID:{bg:"#ff525220",c:"#ff5252",b:"#ff525240"}, SELL:{bg:"#ff525220",c:"#ff5252",b:"#ff525240"}, HOLD:{bg:"#ffffff10",c:"#a89ec0",b:"#3d3760"}, BULLISH:{bg:"#00e67620",c:"#00e676",b:"#00e67640"}, NEUTRAL:{bg:"#ffab4020",c:"#ffab40",b:"#ffab4040"}, BEARISH:{bg:"#ff525220",c:"#ff5252",b:"#ff525240"} };
   const s = m[v] || m.HOLD;
   return <span className="badge" style={{ background:s.bg, color:s.c, border:`1px solid ${s.b}` }}>{v}</span>;
 }
@@ -501,7 +509,7 @@ const SECTOR_COLOURS = [
 ];
 
 // ── Portfolio Performance Chart ─────────────────────────────────────────────
-function PortfolioChart({ holdings, displayCcy, audUsd }) {
+function PortfolioChart({ holdings, displayCcy, audUsd, authFetch }) {
   const canvasRef    = useRef(null);
   const containerRef = useRef(null);
   const [canvasW,  setCanvasW]  = useState(0);
@@ -527,7 +535,7 @@ function PortfolioChart({ holdings, displayCcy, audUsd }) {
     setLoading(true);
     setHistory(null);
     const payload = holdings.map(h => ({ sym: h.sym, qty: h.qty, priceCurrency: h.priceCurrency || "USD" }));
-    fetch("/api/portfolio/history", {
+    authFetch("/api/portfolio/history", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ holdings: payload, range }),
     })
@@ -548,8 +556,11 @@ function PortfolioChart({ holdings, displayCcy, audUsd }) {
     const isUp  = series[series.length - 1].v >= series[0].v;
     const W = canvasW, H = 200;
     const PAD = { t: 16, r: 16, b: 36, l: 72 };
-    canvas.width = W; canvas.height = H;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    canvas.style.width = "100%"; canvas.style.height = H + "px";
     const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
 
     const vals  = series.map(d => d.v);
@@ -650,7 +661,7 @@ function PortfolioChart({ holdings, displayCcy, audUsd }) {
             </p>
           ) : (
             <div style={{ position:"relative" }}>
-              <canvas ref={canvasRef} style={{ width:"100%", height:200, display:"block" }}/>
+              <canvas ref={canvasRef} style={{ display:"block" }}/>
               {first != null && last != null && (
                 <div style={{ display:"flex", justifyContent:"space-between", marginTop:4, paddingLeft:72, paddingRight:16 }}>
                   <span style={{ fontSize:10, color:"var(--muted)", fontFamily:"var(--ff-mono)" }}>
@@ -670,12 +681,12 @@ function PortfolioChart({ holdings, displayCcy, audUsd }) {
 }
 
 // ── Benchmark Strip ─────────────────────────────────────────────────────────
-function BenchmarkStrip({ holdings, livePrices, audUsd }) {
+function BenchmarkStrip({ holdings, livePrices, audUsd, authFetch }) {
   const [benchmarks, setBenchmarks] = useState(null);
   const [period,     setPeriod]     = useState("1d");
 
   useEffect(() => {
-    fetch("/api/benchmarks").then(r => r.json()).then(d => setBenchmarks(d)).catch(() => {});
+    authFetch("/api/benchmarks").then(r => r.json()).then(d => setBenchmarks(d)).catch(() => {});
   }, []);
 
   // Compute portfolio today's weighted % change from live prices
@@ -754,7 +765,7 @@ function BenchmarkStrip({ holdings, livePrices, audUsd }) {
 }
 
 // ── Risk Metrics Panel ──────────────────────────────────────────────────────
-function RiskPanel({ holdings, audUsd }) {
+function RiskPanel({ holdings, audUsd, authFetch }) {
   const { openGlossary } = useContext(GlossaryCtx);
   const [risk,       setRisk]       = useState(null);
   const [loading,    setLoading]    = useState(false);
@@ -768,7 +779,7 @@ function RiskPanel({ holdings, audUsd }) {
     setLoading(true);
     setHasFetched(false);
     const payload = holdings.map(h => ({ sym: h.sym, qty: h.qty, priceCurrency: h.priceCurrency || "USD" }));
-    fetch("/api/portfolio/risk", {
+    authFetch("/api/portfolio/risk", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ holdings: payload }),
     })
@@ -889,8 +900,12 @@ function AllocationPanel({ holdings, livePrices, audUsd, displayCcy }) {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || sectors.length === 0) return;
-    const size = canvas.width;
+    const size = 160;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = size * dpr; canvas.height = size * dpr;
+    canvas.style.width = size + "px"; canvas.style.height = size + "px";
     const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, size, size);
     const cx = size / 2, cy = size / 2;
     const outerR = size * 0.44, innerR = size * 0.26;
@@ -930,7 +945,7 @@ function AllocationPanel({ holdings, livePrices, audUsd, displayCcy }) {
 
         {/* Donut */}
         <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:10 }}>
-          <canvas ref={canvasRef} width={160} height={160} style={{ borderRadius:"50%" }}/>
+          <canvas ref={canvasRef} style={{ borderRadius:"50%", width:160, height:160 }}/>
         </div>
 
         {/* Sector bars */}
@@ -976,7 +991,7 @@ function AllocationPanel({ holdings, livePrices, audUsd, displayCcy }) {
 }
 
 // ── Dividend Panel ──────────────────────────────────────────────────────────
-function DividendPanel({ holdings, livePrices, audUsd, displayCcy }) {
+function DividendPanel({ holdings, livePrices, audUsd, displayCcy, authFetch }) {
   const [divData,  setDivData]  = useState({});
   const [loading,  setLoading]  = useState(false);
   const [expanded, setExpanded] = useState(true);
@@ -986,7 +1001,7 @@ function DividendPanel({ holdings, livePrices, audUsd, displayCcy }) {
   useEffect(() => {
     if (!stockSymKey) return;
     setLoading(true);
-    fetch("/api/portfolio/dividends", {
+    authFetch("/api/portfolio/dividends", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ symbols: stockSymKey.split(",") }),
     })
@@ -1091,7 +1106,7 @@ function DividendPanel({ holdings, livePrices, audUsd, displayCcy }) {
 }
 
 // ── Holding row ────────────────────────────────────────────────────────────
-function HoldingRow({ holding, livePrice, expanded, onToggle, onRemove, onViewChart, onTrade, displayCcy, audUsd, portWeight }) {
+function HoldingRow({ holding, livePrice, expanded, onToggle, onRemove, onViewChart, onTrade, displayCcy, audUsd, portWeight, dividendInfo }) {
   const priceCcy  = holding.priceCurrency || livePrice?.currency || "USD";
   const rawPrice  = livePrice?.price || null;
   const dispPrice = rawPrice ? toDisplay(rawPrice, priceCcy, displayCcy, audUsd) : null;
@@ -1109,7 +1124,7 @@ function HoldingRow({ holding, livePrice, expanded, onToggle, onRemove, onViewCh
           </div>
           <div>
             <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4, flexWrap:"wrap" }}>
-              <span style={{ fontFamily:"var(--ff-head)", fontSize:15, fontWeight:700, color:"var(--text2)" }}>{holding.sym}</span>
+              <span style={{ fontFamily:"var(--ff-head)", fontSize:15, fontWeight:700, color:"var(--text2)", cursor: onViewChart ? "pointer" : "default", textDecoration: onViewChart ? "underline dotted" : "none", textDecorationColor:"var(--muted)" }} onClick={e => { if(onViewChart){ e.stopPropagation(); onViewChart(); } }}>{holding.sym}</span>
               <SourceBadge source={holding.source}/>
               <SectorBadge sector={holding.sector}/>
               {portWeight != null && portWeight >= 20 && (
@@ -1129,7 +1144,7 @@ function HoldingRow({ holding, livePrice, expanded, onToggle, onRemove, onViewCh
               ? <div style={{ fontFamily:"var(--ff-mono)", fontSize:15, fontWeight:500, color:"var(--text2)" }}>{fmtMoney(dispValue, displayCcy)}</div>
               : <div className="shimmer-el" style={{ width:72, height:15 }}/>}
             <div style={{ fontSize:10, color:"var(--muted)", fontFamily:"var(--ff-mono)", marginTop:2 }}>
-              {holding.qty % 1 === 0 ? holding.qty : holding.qty.toFixed(4)} × {dispAvg ? fmtMoney(dispAvg, displayCcy) : "—"}
+              {holding.qty % 1 === 0 ? holding.qty : holding.qty.toFixed(4)} × {dispPrice ? fmtMoney(dispPrice, displayCcy) : dispAvg ? fmtMoney(dispAvg, displayCcy) : "—"}
             </div>
           </div>
           <div style={{ textAlign:"right", minWidth:70 }}>
@@ -1141,7 +1156,8 @@ function HoldingRow({ holding, livePrice, expanded, onToggle, onRemove, onViewCh
         </div>
       </div>
       {expanded && (
-        <div style={{ marginTop:16, paddingTop:16, borderTop:"1px solid var(--border)", display:"flex", justifyContent:"space-between", alignItems:"flex-end", gap:12 }} onClick={e => e.stopPropagation()}>
+        <div style={{ marginTop:16, paddingTop:16, borderTop:"1px solid var(--border)" }} onClick={e => e.stopPropagation()}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-end", gap:12 }}>
           <div style={{ display:"flex", gap:24, flexWrap:"wrap" }}>
             {[
               { l:"LIVE PRICE",   v:dispPrice ? fmtMoney(dispPrice, displayCcy) : "Loading…" },
@@ -1153,7 +1169,7 @@ function HoldingRow({ holding, livePrice, expanded, onToggle, onRemove, onViewCh
             ].map(f => (
               <div key={f.l}>
                 <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:4 }}>{f.l}</div>
-                <div style={{ fontSize:13, fontFamily:"var(--ff-mono)", color:"var(--text2)", fontWeight:500 }}>{f.v}</div>
+                <div style={{ fontSize:13, fontFamily:"var(--ff-mono)", color:f.color||"var(--text2)", fontWeight:500 }}>{f.v}</div>
               </div>
             ))}
           </div>
@@ -1179,6 +1195,48 @@ function HoldingRow({ holding, livePrice, expanded, onToggle, onRemove, onViewCh
               </button>
             )}
           </div>
+          </div>
+          {dividendInfo && dividendInfo.yield > 0 && (
+            <div style={{ marginTop:16, paddingTop:14, borderTop:"1px solid var(--border)" }}>
+              <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.12em", marginBottom:12 }}>DIVIDENDS</div>
+              <div style={{ display:"flex", gap:24, flexWrap:"wrap" }}>
+                {dividendInfo.mostRecentDividend > 0 && (
+                  <div>
+                    <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:4 }}>MOST RECENT</div>
+                    <div style={{ fontSize:13, fontFamily:"var(--ff-mono)", color:"var(--text2)", fontWeight:500 }}>{fmtMoney(dividendInfo.mostRecentDividend, priceCcy)}</div>
+                  </div>
+                )}
+                <div>
+                  <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:4 }}>YIELD</div>
+                  <div style={{ fontSize:13, fontFamily:"var(--ff-mono)", color:"var(--green)", fontWeight:600 }}>{(dividendInfo.yield * 100).toFixed(2)}%</div>
+                </div>
+                {dividendInfo.frankingPct != null && dividendInfo.frankingPct > 0 && (
+                  <div>
+                    <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:4 }}>FRANKING</div>
+                    <div style={{ fontSize:13, fontFamily:"var(--ff-mono)", color:"var(--blue)", fontWeight:500 }}>{dividendInfo.frankingPct.toFixed(0)}%</div>
+                  </div>
+                )}
+                {dividendInfo.annualDivPerShare > 0 && (
+                  <div>
+                    <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:4 }}>ANNUAL DPS</div>
+                    <div style={{ fontSize:13, fontFamily:"var(--ff-mono)", color:"var(--text2)", fontWeight:500 }}>{fmtMoney(dividendInfo.annualDivPerShare, priceCcy)}</div>
+                  </div>
+                )}
+                {dividendInfo.exDivDate && (
+                  <div>
+                    <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:4 }}>{new Date(dividendInfo.exDivDate) < new Date() ? "LAST EX-DIV" : "EX-DIV DATE"}</div>
+                    <div style={{ fontSize:13, fontFamily:"var(--ff-mono)", color:"var(--amber)", fontWeight:500 }}>{fmtDate(dividendInfo.exDivDate)}</div>
+                  </div>
+                )}
+                {dividendInfo.paymentDate && (
+                  <div>
+                    <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:4 }}>{new Date(dividendInfo.paymentDate) < new Date() ? "LAST PAY DATE" : "PAY DATE"}</div>
+                    <div style={{ fontSize:13, fontFamily:"var(--ff-mono)", color:"var(--text2)", fontWeight:500 }}>{fmtDate(dividendInfo.paymentDate)}</div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -1379,8 +1437,8 @@ function StockCard({ stock, expanded, onToggle, livePrices, displayCcy, audUsd, 
           </div>
           <VerdictBadge v={stock.verdict}/>
         </div>
-        <div style={{textAlign:"right",flexShrink:0}}>
-          <div style={{fontFamily:"var(--ff-mono)",fontSize:20,fontWeight:600,color:"var(--text2)",marginBottom:3}}>{fmtMoney(dispPrice,displayCcy)}</div>
+        <div style={{textAlign:"right",minWidth:0}}>
+          <div style={{fontFamily:"var(--ff-mono)",fontSize:20,fontWeight:600,color:"var(--text2)",marginBottom:3,whiteSpace:"nowrap"}}>{fmtMoney(dispPrice,displayCcy)}</div>
           {ld && !ld.error
             ? <div style={{fontFamily:"var(--ff-mono)",fontSize:12,color:ld.up?"var(--green)":"var(--red)"}}>{ld.changeStr}</div>
             : <div style={{fontFamily:"var(--ff-mono)",fontSize:12,color:stock.up?"var(--green)":"var(--red)"}}>{stock.upside}</div>}
@@ -1615,7 +1673,7 @@ function CallCard({ record, currentPriceData, onAnalyse, onRemove, priceFetching
 }
 
 // ── Chart canvas ───────────────────────────────────────────────────────────
-function ChartCanvas({ candles, analysis, range, currency, indicators, displayCcy, audUsd }) {
+function ChartCanvas({ candles, analysis, range, currency, indicators, displayCcy, audUsd, priceType }) {
   const canvasRef   = useRef(null);
   const containerRef = useRef(null);
   const [canvasW, setCanvasW] = useState(0);
@@ -1632,16 +1690,26 @@ function ChartCanvas({ candles, analysis, range, currency, indicators, displayCc
 
   useEffect(() => { draw(hovIdx); }, [candles, analysis, canvasW, hovIdx, indicators, displayCcy, audUsd]);
 
+  const isIndex = priceType === "index";
+
   function convert(p) {
-    if (p == null || !displayCcy || !audUsd) return p;
+    if (p == null || isIndex) return p;
+    if (!displayCcy || !audUsd) return p;
     return toDisplay(p, currency || "USD", displayCcy, audUsd);
   }
 
-  const ccyPrefix = displayCcy === "AUD" ? "A$" : displayCcy === "USD" ? "$" : "";
+  const ccyPrefix = isIndex ? "" : (displayCcy === "AUD" ? "A$" : displayCcy === "USD" ? "$" : "");
 
   function fmt(p) {
     if (!p && p !== 0) return "—";
     const prefix = ccyPrefix;
+    if (isIndex) {
+      // Show full numbers for indices (no k abbreviation, no $ prefix)
+      if (p >= 10000) return p.toLocaleString("en",{maximumFractionDigits:0});
+      if (p >= 1000)  return p.toLocaleString("en",{maximumFractionDigits:0});
+      if (p >= 100)   return p.toFixed(0);
+      return p.toFixed(2);
+    }
     if (p >= 100000) return `${prefix}${(p/1000).toFixed(0)}k`;
     if (p >= 10000)  return `${prefix}${(p/1000).toFixed(1)}k`;
     if (p >= 1000)   return `${prefix}${(p/1000).toFixed(2)}k`;
@@ -1667,8 +1735,11 @@ function ChartCanvas({ candles, analysis, range, currency, indicators, displayCc
     const H = hasIndicators
       ? PT + CHART_H + GAP + VOL_H + GAP2 + RSI_H + GAP3 + MACD_H + PB
       : 420;
-    canvas.width = W; canvas.height = H;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    canvas.style.width = "100%"; canvas.style.height = H + "px";
     const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
 
     const chartW  = W - PL - PR;
@@ -2026,7 +2097,7 @@ function ChartCanvas({ candles, analysis, range, currency, indicators, displayCc
 
   return (
     <div ref={containerRef} style={{width:"100%",position:"relative",borderRadius:10,overflow:"hidden"}}>
-      <canvas ref={canvasRef} style={{display:"block",cursor:"crosshair",width:"100%"}}
+      <canvas ref={canvasRef} style={{display:"block",cursor:"crosshair"}}
         onMouseMove={handleMouseMove} onMouseLeave={()=>setHovIdx(null)}/>
       {hov && (
         <div style={{position:"absolute",top:10,left:10,background:"#1e1a2eed",border:"1px solid var(--border2)",borderRadius:8,padding:"8px 12px",fontSize:11,fontFamily:"var(--ff-mono)",pointerEvents:"none",minWidth:120}}>
@@ -2048,7 +2119,7 @@ function ChartCanvas({ candles, analysis, range, currency, indicators, displayCc
 }
 
 // ── Trade Modal ─────────────────────────────────────────────────────────────
-function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
+function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd, authFetch }) {
   const { sym, name } = config;
   const [exchange, setExchange] = useState(config.exchange || null);
   const isBinance = exchange === "binance";
@@ -2076,12 +2147,12 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
   // Fetch prices
   useEffect(() => {
     if (!isTiger) {
-      fetch(`/api/binance/ticker/${sym}`)
+      authFetch(`/api/binance/ticker/${sym}`)
         .then(r => r.json())
         .then(d => { if (d.price) setBnTicker(d); })
         .catch(() => {});
     }
-    fetch(`/api/chart/${sym}?range=1d`)
+    authFetch(`/api/chart/${sym}?range=1d`)
       .then(r => r.json())
       .then(d => { if (d.currentPrice) setLivePrice(d.currentPrice); })
       .catch(() => {});
@@ -2092,17 +2163,17 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
     if (!exchange) return;
     setAvailBal(null); setUsdcBal(null);
     if (isTiger) {
-      fetch(`/api/tiger/assets?currency=${tradeCcy}`)
+      authFetch(`/api/tiger/assets?currency=${tradeCcy}`)
         .then(r => r.json())
         .then(d => { setAvailBal(d.buyingPower ?? null); setTigerBalCcy(d.currency || tradeCcy); })
         .catch(() => setAvailBal(null));
     } else if (isBinance) {
-      fetch("/api/binance/usdt-balance")
+      authFetch("/api/binance/usdt-balance")
         .then(r => r.json())
         .then(d => { setAvailBal(d.available ?? null); })
         .catch(() => setAvailBal(null));
     } else {
-      fetch("/api/coinbase/usd-balance")
+      authFetch("/api/coinbase/usd-balance")
         .then(r => r.json())
         .then(d => { setAvailBal(d.available ?? null); setUsdcBal(d.availableUSDC ?? null); })
         .catch(() => setAvailBal(null));
@@ -2148,7 +2219,7 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
       if (isTiger) {
         const body = { sym, side, qty: parseInt(shareQty), orderType: tigerOrderType, livePrice: livePriceDisplay };
         if (tigerOrderType === "LMT" && parseFloat(limitPrice) > 0) body.limitPrice = parseFloat(limitPrice);
-        r = await fetch("/api/tiger/order", {
+        r = await authFetch("/api/tiger/order", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
@@ -2163,7 +2234,7 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
         const body = { sym, side };
         if (side === "BUY") body.quoteAmount = parseFloat(quoteAmount);
         else body.qty = parseFloat(cryptoQty);
-        r = await fetch("/api/binance/order", {
+        r = await authFetch("/api/binance/order", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
@@ -2183,7 +2254,7 @@ function TradeModal({ config, onClose, onSuccess, displayCcy, audUsd }) {
         const body = { sym, side, tradeCcy: "USD", orderType: "market", audUsd };
         if (side === "BUY") body.quoteSize = parseFloat(quoteAmount);
         else body.baseSize = parseFloat(cryptoQty);
-        r = await fetch("/api/coinbase/order", {
+        r = await authFetch("/api/coinbase/order", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
@@ -2471,8 +2542,264 @@ function GlossaryModal({ open, onClose, focusTerm, allGlossary }) {
   );
 }
 
+// ── Login / Register Screen ────────────────────────────────────────────────
+function LoginScreen({ onAuth }) {
+  const [mode, setMode] = useState("login"); // "login" | "register"
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [authConfig, setAuthConfig] = useState(null);
+  const googleBtnRef = useRef(null);
+
+  // Fetch auth config and load Google SDK on mount
+  useEffect(() => {
+    fetch("/api/auth/config").then(r => r.json()).then(cfg => {
+      setAuthConfig(cfg);
+      if (cfg.googleClientId) {
+        // Load Google Identity Services SDK
+        const script = document.createElement("script");
+        script.src = "https://accounts.google.com/gsi/client";
+        script.async = true;
+        script.defer = true;
+        document.head.appendChild(script);
+      }
+    }).catch(() => {});
+  }, []);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setError(""); setLoading(true);
+    try {
+      const endpoint = mode === "register" ? "/api/auth/register" : "/api/auth/login";
+      const body = mode === "register" ? { email, password, name } : { email, password };
+      const r = await fetch(endpoint, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body) });
+      const d = await r.json();
+      if (!r.ok) { setError(d.error || "Authentication failed"); setLoading(false); return; }
+      onAuth(d);
+    } catch { setError("Network error — please try again"); }
+    setLoading(false);
+  }
+
+  // Initialize Google SDK and render button once loaded
+  const googleInitRef = useRef(false);
+  useEffect(() => {
+    if (!authConfig?.googleClientId || googleInitRef.current) return;
+    const interval = setInterval(() => {
+      if (window.google?.accounts?.id && googleBtnRef.current) {
+        clearInterval(interval);
+        googleInitRef.current = true;
+        window.google.accounts.id.initialize({
+          client_id: authConfig.googleClientId,
+          callback: async (response) => {
+            setLoading(true);
+            try {
+              const r = await fetch("/api/auth/google", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ credential: response.credential }) });
+              const d = await r.json();
+              if (!r.ok) { setError(d.error || "Google sign-in failed"); setLoading(false); return; }
+              onAuth(d);
+            } catch { setError("Google sign-in failed"); }
+            setLoading(false);
+          },
+        });
+        window.google.accounts.id.renderButton(googleBtnRef.current, {
+          type: "standard",
+          theme: "filled_black",
+          size: "large",
+          width: googleBtnRef.current.offsetWidth,
+          text: "continue_with",
+          shape: "pill",
+        });
+      }
+    }, 200);
+    return () => clearInterval(interval);
+  }, [authConfig]);
+
+  async function handleApple() {
+    setError("Apple Sign-In coming soon — use email/password or Google for now.");
+  }
+
+  const inputStyle = { width:"100%", background:"var(--bg)", border:"1px solid var(--border)", borderRadius:10, padding:"13px 16px", fontSize:14, color:"var(--text2)", fontFamily:"var(--ff-body)", boxSizing:"border-box" };
+  const btnPrimary = { width:"100%", background:"var(--green)", color:"#0a0a14", border:"none", borderRadius:10, padding:"14px", fontSize:15, fontWeight:700, fontFamily:"var(--ff-head)", cursor:"pointer", letterSpacing:"-0.01em" };
+  const btnOAuth = { width:"100%", background:"var(--surface)", border:"1px solid var(--border)", borderRadius:10, padding:"13px", fontSize:14, fontWeight:600, fontFamily:"var(--ff-body)", cursor:"pointer", color:"var(--text2)", display:"flex", alignItems:"center", justifyContent:"center", gap:10 };
+
+  return (
+    <>
+      <style>{css}</style>
+      <div style={{ minHeight:"100vh", background:"var(--bg)", display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
+        <div style={{ width:"100%", maxWidth:420 }}>
+          {/* Logo */}
+          <div style={{ textAlign:"center", marginBottom:40 }}>
+            <div style={{ fontFamily:"var(--ff-head)", fontSize:32, fontWeight:900, letterSpacing:"-0.03em", color:"var(--text2)", marginBottom:8 }}>
+              INTEL<span style={{ color:"var(--green)" }}>IQ</span>
+            </div>
+            <div style={{ fontSize:13, color:"var(--muted2)", fontFamily:"var(--ff-body)" }}>Investment Intelligence Platform</div>
+          </div>
+
+          <div className="card" style={{ padding:"32px 28px", borderRadius:16 }}>
+            {/* Header with toggle */}
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:28 }}>
+              <h2 style={{ fontFamily:"var(--ff-head)", fontSize:22, fontWeight:800, color:"var(--text2)" }}>
+                {mode === "login" ? "Sign in" : "Create account"}
+              </h2>
+              <button onClick={() => { setMode(mode === "login" ? "register" : "login"); setError(""); }} style={{ background:"none", border:"none", color:"var(--green)", fontSize:13, fontFamily:"var(--ff-body)", cursor:"pointer", textDecoration:"underline" }}>
+                {mode === "login" ? "Create account" : "Sign in"}
+              </button>
+            </div>
+
+            {/* OAuth buttons */}
+            <div style={{ display:"grid", gap:10, marginBottom:24 }}>
+              <div ref={googleBtnRef} style={{ width:"100%", minHeight:44, borderRadius:10, overflow:"hidden" }} />
+              <button onClick={handleApple} style={btnOAuth}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M17.05 20.28c-.98.95-2.05.88-3.08.4-1.09-.5-2.08-.48-3.24 0-1.44.62-2.2.44-3.06-.4C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/></svg>
+                Continue with Apple
+              </button>
+            </div>
+
+            {/* Divider */}
+            <div style={{ display:"flex", alignItems:"center", gap:16, marginBottom:24 }}>
+              <div style={{ flex:1, height:1, background:"var(--border)" }}/>
+              <span style={{ fontSize:12, color:"var(--muted)", fontFamily:"var(--ff-mono)" }}>or</span>
+              <div style={{ flex:1, height:1, background:"var(--border)" }}/>
+            </div>
+
+            {/* Form */}
+            <form onSubmit={handleSubmit} style={{ display:"grid", gap:16 }}>
+              {mode === "register" && (
+                <div>
+                  <label style={{ display:"block", fontSize:13, fontWeight:600, color:"var(--text2)", fontFamily:"var(--ff-body)", marginBottom:6 }}>Name</label>
+                  <input value={name} onChange={e => setName(e.target.value)} placeholder="Your name" style={inputStyle}/>
+                </div>
+              )}
+              <div>
+                <label style={{ display:"block", fontSize:13, fontWeight:600, color:"var(--text2)", fontFamily:"var(--ff-body)", marginBottom:6 }}>Email<span style={{ color:"var(--red)" }}>*</span></label>
+                <input value={email} onChange={e => setEmail(e.target.value)} type="email" placeholder="Email" required style={inputStyle}/>
+              </div>
+              <div>
+                <label style={{ display:"block", fontSize:13, fontWeight:600, color:"var(--text2)", fontFamily:"var(--ff-body)", marginBottom:6 }}>Password<span style={{ color:"var(--red)" }}>*</span></label>
+                <input value={password} onChange={e => setPassword(e.target.value)} type="password" placeholder="Password" required style={inputStyle}/>
+                {mode === "register" && (
+                  <div style={{ fontSize:11, color:"var(--muted)", marginTop:6, fontFamily:"var(--ff-body)" }}>
+                    15+ characters, or 8+ with a number and lowercase letter.
+                  </div>
+                )}
+              </div>
+              {error && (
+                <div style={{ background:"#ff525218", border:"1px solid #ff525240", borderRadius:8, padding:"10px 14px", fontSize:12, color:"var(--red)", fontFamily:"var(--ff-body)" }}>
+                  {error}
+                </div>
+              )}
+              <button type="submit" disabled={loading} style={{ ...btnPrimary, opacity:loading?0.6:1 }}>
+                {loading ? "Please wait..." : mode === "login" ? "Sign in" : "Create account"}
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
 // ── Main App ───────────────────────────────────────────────────────────────
 export default function App() {
+  // ── Auth state ──
+  const [authUser, setAuthUser] = useState(null);
+  const [authToken, setAuthToken] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const refreshTokenRef = useRef(localStorage.getItem("inteliq_refresh_token"));
+
+  // authFetch: auto-attaches JWT, auto-refreshes on 401 with lock to prevent race conditions
+  const refreshPromiseRef = useRef(null);
+  const authFetch = useCallback(async (url, options = {}) => {
+    const doFetch = (token) => fetch(url, { ...options, headers: { ...options.headers, ...(token ? { Authorization: `Bearer ${token}` } : {}) } });
+    let r = await doFetch(authToken);
+    if (r.status === 401 && refreshTokenRef.current) {
+      // Use a shared promise so only one refresh runs at a time
+      if (!refreshPromiseRef.current) {
+        refreshPromiseRef.current = fetch("/api/auth/refresh", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ refreshToken: refreshTokenRef.current }) })
+          .then(rr => {
+            if (!rr.ok) throw new Error("refresh failed");
+            return rr.json();
+          })
+          .then(d => {
+            setAuthToken(d.accessToken);
+            refreshTokenRef.current = d.refreshToken;
+            localStorage.setItem("inteliq_refresh_token", d.refreshToken);
+            return d.accessToken;
+          })
+          .catch((err) => {
+            console.log("[AUTH] Refresh failed:", err.message, "— NOT logging out");
+            return null;
+          })
+          .finally(() => { refreshPromiseRef.current = null; });
+      }
+      const newToken = await refreshPromiseRef.current;
+      if (newToken) {
+        r = await doFetch(newToken);
+      }
+    }
+    return r;
+  }, [authToken]);
+
+  // On mount: try to restore session from refresh token
+  useEffect(() => {
+    const rt = localStorage.getItem("inteliq_refresh_token");
+    if (!rt) { setAuthLoading(false); return; }
+    fetch("/api/auth/refresh", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ refreshToken: rt }) })
+      .then(r => { if (!r.ok) throw new Error("expired"); return r.json(); })
+      .then(d => {
+        setAuthUser(d.user);
+        setAuthToken(d.accessToken);
+        refreshTokenRef.current = d.refreshToken;
+        localStorage.setItem("inteliq_refresh_token", d.refreshToken);
+      })
+      .catch(() => { console.log("[AUTH] Mount refresh failed — keeping token for retry"); })
+      .finally(() => setAuthLoading(false));
+  }, []);
+
+  function handleAuth(data) {
+    console.log("[AUTH] Login success for:", data.user?.email);
+    setAuthUser(data.user);
+    setAuthToken(data.accessToken);
+    refreshTokenRef.current = data.refreshToken;
+    localStorage.setItem("inteliq_refresh_token", data.refreshToken);
+  }
+
+  function handleLogout() {
+    console.log("[AUTH] LOGOUT called from:", new Error().stack?.split("\n")[2]?.trim());
+    if (authToken) {
+      fetch("/api/auth/logout", { method:"POST", headers:{ Authorization:`Bearer ${authToken}` } }).catch(()=>{});
+    }
+    setAuthUser(null); setAuthToken(null);
+    refreshTokenRef.current = null;
+    localStorage.removeItem("inteliq_refresh_token");
+  }
+
+  // Auth loading splash
+  if (authLoading) {
+    return (
+      <>
+        <style>{css}</style>
+        <div style={{ minHeight:"100vh", background:"var(--bg)", display:"flex", alignItems:"center", justifyContent:"center" }}>
+          <div style={{ fontFamily:"var(--ff-head)", fontSize:28, fontWeight:900, color:"var(--text2)" }}>
+            INTEL<span style={{ color:"var(--green)" }}>IQ</span>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  // Not authenticated — show login screen
+  if (!authUser) {
+    return <LoginScreen onAuth={handleAuth}/>;
+  }
+
+  // Authenticated — render main app
+  return <AppMain user={authUser} authFetch={authFetch} onLogout={handleLogout}/>;
+}
+
+function AppMain({ user, authFetch, onLogout }) {
   const [tab,setTab]           = useState("dashboard");
   const [mobileMore,setMobileMore] = useState(false);
 
@@ -2526,9 +2853,7 @@ export default function App() {
   const [searchStatus,setSearchStatus] = useState(null);
   const [searchResult,setResult]   = useState(null);
   const [searchError,setSearchErr] = useState(null);
-  const [searchHistory,setHistory] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("inteliq_history") || "[]"); } catch { return []; }
-  });
+  const [searchHistory,setHistory] = useState([]);
 
   // Portfolio sources
   const [cbHoldings,setCb] = useState([]);
@@ -2548,30 +2873,18 @@ export default function App() {
   const [tigerOrders,setTigerOrders] = useState([]);
   const [tigerOrdersLoading,setTigerOL] = useState(false);
 
-  const [ledgerAddrs, setLedgerAddrs] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("inteliq_ledger_addrs") || "[]"); } catch { return []; }
-  });
+  const [ledgerAddrs, setLedgerAddrs] = useState([]);
   const [ldgHoldings,setLdg] = useState([]);
   const [ldgSyncing,setLdgS] = useState(false);
   const [ldgLastSync,setLdgL]= useState(null);
   const [ldgError,setLdgE]   = useState("");
 
-  const [cmcHoldings,setCmc] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("inteliq_cmc") || "[]"); } catch { return []; }
-  });
+  const [cmcHoldings,setCmc] = useState([]);
   const [cmcReimport,setCmcReimport] = useState(false);
-
-  // Auto-load CMC holdings from server (always sync to pick up CSV updates)
-  useEffect(() => {
-    fetch("/api/cmc/holdings").then(r=>r.json()).then(h => {
-      if (h && h.length > 0) setCmc(h);
-    }).catch(()=>{});
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const [cmcDivDates, setCmcDivDates] = useState({});
 
   // Watchlist
-  const [watchlist,setWatchlist] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("inteliq_watchlist") || "[]"); } catch { return []; }
-  });
+  const [watchlist,setWatchlist] = useState([]);
 
   // News
   const [newsFilter,setNewsFilter] = useState("ALL");
@@ -2585,17 +2898,13 @@ export default function App() {
   const [ipoError,   setIpoError]   = useState(null);
 
   // Watchlist Alerts
-  const [alerts,         setAlerts]         = useState(() => {
-    try { return JSON.parse(localStorage.getItem("inteliq_alerts") || "{}"); } catch { return {}; }
-  });  // keyed by sym: { type, value, note, triggered, triggeredAt }
+  const [alerts,         setAlerts]         = useState({});  // keyed by sym: { type, value, note, triggered, triggeredAt }
   const [triggeredAlerts,setTriggeredAlerts]= useState([]);  // sym list for in-session notifications
   const [alertEditSym,   setAlertEditSym]   = useState(null); // sym currently being edited
   const [alertFormVal,   setAlertFormVal]   = useState({ type:"price_above", value:"", note:"" });
 
   // Trade Journal
-  const [journalEntries,  setJournalEntries]  = useState(() => {
-    try { return JSON.parse(localStorage.getItem("inteliq_journal") || "[]"); } catch { return []; }
-  });
+  const [journalEntries,  setJournalEntries]  = useState([]);
   const [journalAnalysis, setJournalAnalysis] = useState(null);
   const [journalAnalysing,setJournalAnalysing]= useState(false);
   const [journalAnalysisError, setJournalAnalysisError] = useState(null);
@@ -2626,9 +2935,7 @@ export default function App() {
   const [coachError,   setCoachError]   = useState(null);
 
   // AI Call Record
-  const [callRecords,        setCallRecords]        = useState(() => {
-    try { return JSON.parse(localStorage.getItem("inteliq_calls") || "[]"); } catch { return []; }
-  });
+  const [callRecords,        setCallRecords]        = useState([]);
   const [callsFilter,        setCallsFilter]        = useState("ALL");
   const [callsPrices,        setCallsPrices]        = useState({});
   const [callsPriceFetching, setCallsPriceFetching] = useState(false);
@@ -2643,6 +2950,16 @@ export default function App() {
   const [detailAnalysis,setDetailAnalysis] = useState(null);
   const [detailAnalysing,setDetailAnalysing] = useState(false);
 
+  // Live chart polling
+  const [liveMode,setLiveMode]             = useState(false);
+  const [liveInterval,setLiveInterval]     = useState(30);
+  const [liveLastUpdate,setLiveLastUpdate] = useState(null);
+  const liveTimerRef = useRef(null);
+
+  // Indices
+  const [indicesData,setIndicesData]       = useState(null);
+  const [indicesLoading,setIndicesLoading] = useState(false);
+
   // Explorer inline chart
   const [explorerChart,setExplorerChart]               = useState(null);
   const [explorerChartLoading,setExplorerChartLoading] = useState(false);
@@ -2653,20 +2970,21 @@ export default function App() {
   const [glossaryTerm,setGlossaryTerm] = useState(null);
   const openGlossary = t => { setGlossaryTerm(t||null); setGlossaryOpen(true); };
   const [tradeModal,setTradeModal] = useState(null);
-  const [customTerms,setCustomTerms] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("inteliq_glossary_custom") || "[]"); } catch { return []; }
-  });
+  const [customTerms,setCustomTerms] = useState([]);
   const allGlossary = [...GLOSSARY, ...customTerms];
 
-  // Persist custom glossary terms
-  useEffect(() => { try { localStorage.setItem("inteliq_glossary_custom", JSON.stringify(customTerms)); } catch {} }, [customTerms]);
+  // Persist custom glossary terms (debounced to server)
+  const userDataSave = useCallback((key, data) => {
+    authFetch(`/api/user-data/${key}`, { method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ data }) }).catch(()=>{});
+  }, [authFetch]);
+  useEffect(() => { const t = setTimeout(() => userDataSave("glossary_custom", customTerms), 500); return () => clearTimeout(t); }, [customTerms, userDataSave]);
 
   const [glossaryExtracting,setGlossaryExtracting] = useState(false);
 
   async function extractGlossaryTerms(text) {
     if (!text || typeof text !== "string" || text.length < 50) return;
     try {
-      const r = await fetch("/api/glossary/extract", {
+      const r = await authFetch("/api/glossary/extract", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text }),
       });
@@ -2682,22 +3000,82 @@ export default function App() {
     } catch {}
   }
 
-  // Persist CMC
-  useEffect(() => { try { localStorage.setItem("inteliq_cmc", JSON.stringify(cmcHoldings)); } catch {} }, [cmcHoldings]);
-  // Persist history
-  useEffect(() => { try { localStorage.setItem("inteliq_history", JSON.stringify(searchHistory)); } catch {} }, [searchHistory]);
-  // Persist watchlist
-  useEffect(() => { try { localStorage.setItem("inteliq_watchlist", JSON.stringify(watchlist)); } catch {} }, [watchlist]);
-  // Persist call records
-  useEffect(() => { try { localStorage.setItem("inteliq_calls", JSON.stringify(callRecords)); } catch {} }, [callRecords]);
-  // Persist journal
-  useEffect(() => { try { localStorage.setItem("inteliq_journal", JSON.stringify(journalEntries)); } catch {} }, [journalEntries]);
-  // Persist alerts
-  useEffect(() => { try { localStorage.setItem("inteliq_alerts", JSON.stringify(alerts)); } catch {} }, [alerts]);
+  // Fetch dividend data for CMC stock holdings
+
+  // Fetch ex-div / pay dates from Yahoo Finance for dividend-paying CMC holdings
+  const cmcDivSymKey = cmcHoldings.map(h => h.sym).join(",");
+  useEffect(() => {
+    if (!cmcDivSymKey) return;
+    authFetch("/api/dividends/dates", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ symbols: cmcDivSymKey.split(",") }) })
+      .then(r => r.json()).then(d => {
+        setCmcDivDates(d);
+        // Merge YF yield data into holdings that have no CSV dividend data — persists to DB so it's available on next load
+        setCmc(prev => {
+          const updated = prev.map(h => {
+            if ((h.divYieldPct || 0) > 0) return h; // CSV already has yield
+            const yf = d[h.sym];
+            if (!yf?.yield) return h;
+            return { ...h, divYieldPct: yf.yield * 100, divCents: (yf.annualDPS || 0) * 100 };
+          });
+          return updated;
+        });
+      }).catch(() => {});
+  }, [cmcDivSymKey]);
+
+  // Persist to server (debounced)
+  const dataLoadedRef = useRef(false);
+  useEffect(() => { if (!dataLoadedRef.current) return; const t = setTimeout(() => userDataSave("cmc_holdings", cmcHoldings), 500); return () => clearTimeout(t); }, [cmcHoldings, userDataSave]);
+  useEffect(() => { if (!dataLoadedRef.current) return; const t = setTimeout(() => userDataSave("search_history", searchHistory), 500); return () => clearTimeout(t); }, [searchHistory, userDataSave]);
+  useEffect(() => { if (!dataLoadedRef.current) return; const t = setTimeout(() => userDataSave("watchlist", watchlist), 500); return () => clearTimeout(t); }, [watchlist, userDataSave]);
+  useEffect(() => { if (!dataLoadedRef.current) return; const t = setTimeout(() => userDataSave("call_records", callRecords), 500); return () => clearTimeout(t); }, [callRecords, userDataSave]);
+  useEffect(() => { if (!dataLoadedRef.current) return; const t = setTimeout(() => userDataSave("journal", journalEntries), 500); return () => clearTimeout(t); }, [journalEntries, userDataSave]);
+  useEffect(() => { if (!dataLoadedRef.current) return; const t = setTimeout(() => userDataSave("alerts", alerts), 500); return () => clearTimeout(t); }, [alerts, userDataSave]);
+  useEffect(() => { if (!dataLoadedRef.current) return; const t = setTimeout(() => userDataSave("display_currency", displayCcy), 500); return () => clearTimeout(t); }, [displayCcy, userDataSave]);
+
+  // Force full reload when iOS restores page from BFCache (stale React state)
+  useEffect(() => {
+    const onPageShow = (e) => { if (e.persisted) window.location.reload(); };
+    window.addEventListener("pageshow", onPageShow);
+    return () => window.removeEventListener("pageshow", onPageShow);
+  }, []);
+
+  // Load user data from server on mount (or migrate from localStorage on first login)
+  useEffect(() => {
+    authFetch("/api/user-data/").then(r => r.json()).then(data => {
+      if (data && Object.keys(data).length > 0) {
+        // Server has data — load it
+        if (data.watchlist) setWatchlist(data.watchlist);
+        if (data.search_history) setHistory(data.search_history);
+        if (data.ledger_addrs) setLedgerAddrs(data.ledger_addrs);
+        if (data.cmc_holdings) setCmc(data.cmc_holdings);
+        if (data.alerts) setAlerts(data.alerts);
+        if (data.journal) setJournalEntries(data.journal);
+        if (data.call_records) setCallRecords(data.call_records);
+        if (data.glossary_custom) setCustomTerms(data.glossary_custom);
+        if (data.display_currency) setDisplayCcy(data.display_currency);
+      } else {
+        // First login — check localStorage for migration
+        const migrate = {};
+        const tryParse = (key) => { try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : null; } catch { return null; } };
+        const wl = tryParse("inteliq_watchlist"); if (wl?.length) { migrate.watchlist = wl; setWatchlist(wl); }
+        const hist = tryParse("inteliq_history"); if (hist?.length) { migrate.search_history = hist; setHistory(hist); }
+        const addrs = tryParse("inteliq_ledger_addrs"); if (addrs?.length) { migrate.ledger_addrs = addrs; setLedgerAddrs(addrs); }
+        const cmc = tryParse("inteliq_cmc"); if (cmc?.length) { migrate.cmc_holdings = cmc; setCmc(cmc); }
+        const al = tryParse("inteliq_alerts"); if (al && Object.keys(al).length) { migrate.alerts = al; setAlerts(al); }
+        const jn = tryParse("inteliq_journal"); if (jn?.length) { migrate.journal = jn; setJournalEntries(jn); }
+        const cr = tryParse("inteliq_calls"); if (cr?.length) { migrate.call_records = cr; setCallRecords(cr); }
+        const gt = tryParse("inteliq_glossary_custom"); if (gt?.length) { migrate.glossary_custom = gt; setCustomTerms(gt); }
+        if (Object.keys(migrate).length > 0) {
+          authFetch("/api/user-data/migrate", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(migrate) }).catch(()=>{});
+        }
+      }
+      dataLoadedRef.current = true;
+    }).catch(() => { dataLoadedRef.current = true; });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch FX rate on mount
   useEffect(() => {
-    fetch("/api/fx/audusd").then(r => r.json()).then(d => { if (d.rate) setAudUsd(d.rate); }).catch(() => {});
+    authFetch("/api/fx/audusd").then(r => r.json()).then(d => { if (d.rate) setAudUsd(d.rate); }).catch(() => {});
   }, []);
 
   // Fetch live prices whenever holdings, watchlist, or dashboard picks change
@@ -2710,7 +3088,7 @@ export default function App() {
     ];
     const unique = all.filter((s,i,a) => a.findIndex(x=>x.sym===s.sym)===i).map(h=>({sym:h.sym,type:h.priceType}));
     if (!unique.length) return;
-    fetch("/api/prices", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({symbols:unique}) })
+    authFetch("/api/prices", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({symbols:unique}) })
       .then(r=>r.json()).then(d=>setLP(p=>({...p,...d}))).catch(()=>{});
   }, [cbHoldings,bnHoldings,tigerHoldings,ldgHoldings,cmcHoldings,dashPicks,watchlist]);
 
@@ -2747,10 +3125,12 @@ export default function App() {
     if (patched) setCallRecords(updated);
   }, [livePrices]);
 
-  // Persist ledger addresses
+  // Persist ledger addresses (debounced to server)
   useEffect(() => {
-    try { localStorage.setItem("inteliq_ledger_addrs", JSON.stringify(ledgerAddrs)); } catch {}
-  }, [ledgerAddrs]);
+    if (!dataLoadedRef.current) return;
+    const t = setTimeout(() => userDataSave("ledger_addrs", ledgerAddrs), 500);
+    return () => clearTimeout(t);
+  }, [ledgerAddrs, userDataSave]);
 
   // Sync exchanges on mount
   useEffect(() => { syncCoinbase(); syncBinance(); syncTiger(); syncTigerOrders(); syncLedger(); }, []);
@@ -2767,10 +3147,38 @@ export default function App() {
     if (tab === "detail" && detailSym) fetchChart(detailSym.sym, chartRange);
   }, [chartRange, displayCcy]);
 
+  // Fetch indices summary when tab activates
+  useEffect(() => {
+    if (tab === "indices" && !indicesData) {
+      setIndicesLoading(true);
+      authFetch("/api/indices/summary").then(r=>r.json()).then(d=>{setIndicesData(d);setIndicesLoading(false);}).catch(()=>setIndicesLoading(false));
+    }
+  }, [tab]);
+
+  // Live chart polling
+  useEffect(() => {
+    if (liveTimerRef.current) { clearInterval(liveTimerRef.current); liveTimerRef.current = null; }
+    if (!liveMode || chartRange !== "1d" || tab !== "detail" || !detailSym) return;
+    const poll = async () => {
+      try {
+        const r = await authFetch(`/api/chart/${encodeURIComponent(detailSym.sym)}?range=1d&currency=${displayCcy}`);
+        const d = await r.json();
+        if (!d.error) { setChartData(d); setLiveLastUpdate(Date.now()); }
+      } catch {}
+    };
+    liveTimerRef.current = setInterval(poll, liveInterval * 1000);
+    return () => { if (liveTimerRef.current) clearInterval(liveTimerRef.current); };
+  }, [liveMode, liveInterval, chartRange, tab, detailSym?.sym, displayCcy]);
+
+  // Auto-disable live mode when leaving 1D or detail
+  useEffect(() => {
+    if (chartRange !== "1d" || tab !== "detail") setLiveMode(false);
+  }, [chartRange, tab]);
+
   async function syncCoinbase() {
     setCbS(true); setCbE("");
     try {
-      const r = await fetch("/api/coinbase/balances"); const d = await r.json();
+      const r = await authFetch("/api/coinbase/balances"); const d = await r.json();
       if (d.error) setCbE(d.error); else { setCb(d.holdings||[]); setCbL(nowTime()); }
     } catch { setCbE("Could not connect — check COINBASE_API_KEY and COINBASE_API_SECRET in .env"); }
     setCbS(false);
@@ -2779,7 +3187,7 @@ export default function App() {
   async function syncBinance() {
     setBnS(true); setBnE("");
     try {
-      const r = await fetch("/api/binance/balances"); const d = await r.json();
+      const r = await authFetch("/api/binance/balances"); const d = await r.json();
       if (d.error) setBnE(d.error); else { setBn(d.holdings||[]); setBnL(nowTime()); }
     } catch { setBnE("Could not connect — check BINANCE_API_KEY and BINANCE_API_SECRET in .env"); }
     setBnS(false);
@@ -2788,7 +3196,7 @@ export default function App() {
   async function syncTiger() {
     setTigerS(true); setTigerE("");
     try {
-      const r = await fetch("/api/tiger/balances"); const d = await r.json();
+      const r = await authFetch("/api/tiger/balances"); const d = await r.json();
       if (d.error) setTigerE(d.error); else { setTiger(d.holdings||[]); setTigerL(nowTime()); }
     } catch { setTigerE("Could not connect — check Tiger API config in .env"); }
     setTigerS(false);
@@ -2797,7 +3205,7 @@ export default function App() {
   async function syncTigerOrders() {
     setTigerOL(true);
     try {
-      const r = await fetch("/api/tiger/orders"); const d = await r.json();
+      const r = await authFetch("/api/tiger/orders"); const d = await r.json();
       if (!d.error) setTigerOrders(d.orders || []);
     } catch {}
     setTigerOL(false);
@@ -2807,7 +3215,7 @@ export default function App() {
     if (!ledgerAddrs.length) return;
     setLdgS(true); setLdgE("");
     try {
-      const r = await fetch("/api/ledger/balances", {
+      const r = await authFetch("/api/ledger/balances", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ addresses: ledgerAddrs }),
@@ -2825,7 +3233,7 @@ export default function App() {
     if (force) setDashPicks([]);
     try {
       const url = force ? "/api/dashboard/picks/stream?force=1" : "/api/dashboard/picks/stream";
-      const r = await fetch(url);
+      const r = await authFetch(url);
       const reader = r.body.getReader();
       const decoder = new TextDecoder();
       let buf = "";
@@ -2860,7 +3268,7 @@ export default function App() {
   async function fetchNews() {
     setNewsLoading(true);
     try {
-      const r = await fetch("/api/news");
+      const r = await authFetch("/api/news");
       const d = await r.json();
       if (Array.isArray(d) && d.length > 0) setNewsItems(d);
     } catch {}
@@ -2871,7 +3279,7 @@ export default function App() {
     if (ipoLoading) return;
     setIpoLoading(true); setIpoError(null);
     try {
-      const r = await fetch("/api/ipo");
+      const r = await authFetch("/api/ipo");
       const d = await r.json();
       if (Array.isArray(d)) setIpoItems(d);
       else setIpoError(d.error || "Failed to load IPO data");
@@ -2887,7 +3295,7 @@ export default function App() {
     const unique = callRecords
       .filter((c, i, a) => a.findIndex(x => x.sym === c.sym) === i)
       .map(c => ({ sym: c.sym, type: c.priceType }));
-    fetch("/api/prices", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({symbols:unique}) })
+    authFetch("/api/prices", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({symbols:unique}) })
       .then(r => r.json()).then(d => setCallsPrices(d)).catch(() => {})
       .finally(() => setCallsPriceFetching(false));
   }, [tab]);
@@ -2927,10 +3335,10 @@ export default function App() {
       });
     }
     const syms = activeAlerts.map(([sym]) => ({ sym, type: watchlist.find(w=>w.sym===sym)?.priceType || "stock" }));
-    fetch("/api/prices", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ symbols: syms }) })
+    authFetch("/api/prices", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ symbols: syms }) })
       .then(r => r.json()).then(checkAlerts).catch(() => {});
     const interval = setInterval(() => {
-      fetch("/api/prices", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ symbols: syms }) })
+      authFetch("/api/prices", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ symbols: syms }) })
         .then(r => r.json()).then(checkAlerts).catch(() => {});
     }, 60000);
     return () => clearInterval(interval);
@@ -2941,7 +3349,7 @@ export default function App() {
     if (macroEvents.length && !macroError) return; // already loaded
     setMacroLoading(true); setMacroError(null);
     const holdingSyms = [...new Set([...allHoldings.map(h=>h.sym), ...watchlist.map(w=>w.sym)])];
-    fetch("/api/macro", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ holdingSyms }) })
+    authFetch("/api/macro", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ holdingSyms }) })
       .then(r => r.json()).then(d => { if (d.error) setMacroError(d.error); else setMacroEvents(d); })
       .catch(()=>setMacroError("Could not load macro calendar")).finally(()=>setMacroLoading(false));
   }, [tab]);
@@ -2954,7 +3362,7 @@ export default function App() {
     ])].filter(s => !["BTC","ETH","SOL","BNB","XRP","ADA","DOGE","AVAX"].includes(s.toUpperCase()));
     if (!allSyms.length) return;
     setEarningsLoading(true);
-    fetch("/api/earnings", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ symbols: allSyms }) })
+    authFetch("/api/earnings", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ symbols: allSyms }) })
       .then(r => r.json()).then(d => setEarningsData(d)).catch(() => {})
       .finally(() => setEarningsLoading(false));
   }, [tab]);
@@ -2966,6 +3374,8 @@ export default function App() {
     setTab("detail");
     setChartData(null);
     setChartRange("1mo");
+    setLiveMode(false);
+    setLiveLastUpdate(null);
     if (preloadedAnalysis) {
       setDetailAnalysis(preloadedAnalysis);
       setDetailAnalysing(false);
@@ -2980,7 +3390,7 @@ export default function App() {
     setChartLoading(true);
     if (!skipAnalysis) setDetailAnalysis(null);
     try {
-      const r = await fetch(`/api/chart/${encodeURIComponent(sym)}?range=${range}&currency=${displayCcy}`);
+      const r = await authFetch(`/api/chart/${encodeURIComponent(sym)}?range=${range}&currency=${displayCcy}`);
       const d = await r.json();
       if (!d.error) { setChartData(d); if (!skipAnalysis) fetchDetailAnalysis(d); }
       else console.error("Chart error:", d.error);
@@ -2991,16 +3401,19 @@ export default function App() {
   async function fetchDetailAnalysis(data) {
     setDetailAnalysing(true);
     try {
-      // Fetch fundamentals (server returns null for crypto/unknown)
+      // Fetch fundamentals (skip for crypto/indices)
       let fundamentals = null;
-      try {
-        const fr = await fetch(`/api/fundamentals/${encodeURIComponent(data.sym)}`);
-        fundamentals = await fr.json();
-      } catch {}
+      const isIdx = detailSym?.priceType === "index";
+      if (!isIdx) {
+        try {
+          const fr = await authFetch(`/api/fundamentals/${encodeURIComponent(data.sym)}`);
+          fundamentals = await fr.json();
+        } catch {}
+      }
       const iv = detailStock?.verdict || null;
-      const r = await fetch("/api/analyse/detail", {
+      const r = await authFetch("/api/analyse/detail", {
         method:"POST", headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({ sym:data.sym, name:data.name, candles:data.candles, range:data.range, currentPrice:data.currentPrice, currency:data.currency, indicators:data.indicators, fundamentals, initialVerdict:iv })
+        body:JSON.stringify({ sym:data.sym, name:data.name, candles:data.candles, range:data.range, currentPrice:data.currentPrice, currency:data.currency, indicators:data.indicators, fundamentals, initialVerdict:iv, isIndex:isIdx })
       });
       const d = await r.json();
       if (!d.error) {
@@ -3031,8 +3444,8 @@ export default function App() {
       if (isTickerLike) {
         try {
           const parallelFetches = [
-            fetch(`/api/price?sym=${upperQ}&type=${priceType}`).then(r=>r.json()).catch(()=>null),
-            ...(!isKnownCrypto ? [fetch(`/api/fundamentals/${upperQ}`).then(r=>r.json()).catch(()=>null)] : []),
+            authFetch(`/api/price?sym=${upperQ}&type=${priceType}`).then(r=>r.json()).catch(()=>null),
+            ...(!isKnownCrypto ? [authFetch(`/api/fundamentals/${upperQ}`).then(r=>r.json()).catch(()=>null)] : []),
           ];
           const [pd, fmpData] = await Promise.all(parallelFetches);
           if (pd?.price) { livePrice = pd.price; const pdCcy = pd.currency || "USD"; livePriceCtx = ` The current live market price is $${pd.price.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})} ${pdCcy} as of today — base all price levels, support/resistance, and targets on this actual price.`; }
@@ -3055,7 +3468,7 @@ export default function App() {
         if (parts.length) fundamentalsCtx = `\n\nLIVE FUNDAMENTALS (FMP): ${parts.join(" | ")}\nUse this live data for your fundamental analysis.`;
       }
       // Stream analysis for faster perceived response
-      const streamRes = await fetch("/api/analyse/stream", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({
+      const streamRes = await authFetch("/api/analyse/stream", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({
         model:"claude-sonnet-4-20250514", max_tokens:1000,
         system:`You are a senior investment analyst. Today is ${today}. Your training knowledge has a cutoff of approximately mid-2025 — do NOT present specific metrics from your training data (e.g. ETF flow volumes, exact hash rates, specific institutional inflow figures, dated earnings numbers) as if they are current facts for ${today}. For fundamentals, focus on structural and qualitative factors. If you cite a specific metric that may have changed, frame it as approximate or add "as of mid-2025". All macro commentary must reflect conditions as of ${today} — do not reference past rate decisions or events as if they are upcoming. For crypto assets (BTC, ETH, SOL etc) analyse the native coin/token directly — do NOT substitute an ETF or trust product. IMPORTANT: set priceStatic to 0 — the live price will be injected separately. Target price must be in the stock's native trading currency (AUD for ASX .AX stocks, USD for US stocks). Respond ONLY with valid JSON, no markdown:
 {"sym":"TICKER","name":"Full name","sector":"sector","verdict":"BUY|WATCH|AVOID|HOLD","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","priceStatic":0,"target":"$X","upside":"+X%","up":true,"priceType":"stock or crypto","avgCurrency":"USD or AUD","priceCurrency":"USD or AUD","summary":"2-3 sentences","macro":"2-3 sentences","fundamental":"2-3 sentences","technical":"2-3 sentences","sentiment":"2-3 sentences","insider":"2-3 sentences","portfolio":"2-3 sentences"}`,
@@ -3102,18 +3515,18 @@ export default function App() {
       extractGlossaryTerms(explorerText);
       // Auto-fetch inline chart using display currency for crypto (BTC-USD or BTC-AUD)
       setExplorerChart(null); setExplorerChartLoading(true);
-      fetch(`/api/chart/${encodeURIComponent(parsed.sym)}?range=1mo&currency=${displayCcy}`)
+      authFetch(`/api/chart/${encodeURIComponent(parsed.sym)}?range=1mo&currency=${displayCcy}`)
         .then(r=>r.json()).then(async d=>{
           if(!d.error){
             setExplorerChart(d);
             // Fetch fundamentals for the parsed symbol (may differ from search query)
             let detailFundamentals = null;
             if (parsed.priceType !== "crypto") {
-              try { detailFundamentals = await fetch(`/api/fundamentals/${encodeURIComponent(parsed.sym)}`).then(r=>r.json()); } catch {}
+              try { detailFundamentals = await authFetch(`/api/fundamentals/${encodeURIComponent(parsed.sym)}`).then(r=>r.json()); } catch {}
             }
             // Run comprehensive analysis and update card verdict to match
             try {
-              const ar = await fetch("/api/analyse/detail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...d, fundamentals:detailFundamentals, initialVerdict:parsed.verdict})});
+              const ar = await authFetch("/api/analyse/detail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...d, fundamentals:detailFundamentals, initialVerdict:parsed.verdict})});
               const analysis = await ar.json();
               if(!analysis.error){
                 setExplorerAnalysis(analysis);
@@ -3128,7 +3541,7 @@ export default function App() {
         { ...parsed, analysedAt: new Date().toISOString() },
         ...prev.filter(h => h.sym !== parsed.sym)
       ].slice(0, 10));
-      fetch(`/api/price?sym=${parsed.sym}&type=${parsed.priceType}`).then(r=>r.json()).then(d=>{
+      authFetch(`/api/price?sym=${parsed.sym}&type=${parsed.priceType}`).then(r=>r.json()).then(d=>{
         setLP(p=>({...p,[parsed.sym]:d}));
         if(d?.price) setResult(prev=>prev?{...prev,priceStatic:d.price,priceCurrency:d.currency||prev.priceCurrency}:prev);
       }).catch(()=>{});
@@ -3153,7 +3566,7 @@ export default function App() {
     if (journalEntries.length < 3) return;
     setJournalAnalysing(true); setJournalAnalysisError(null);
     try {
-      const r = await fetch("/api/journal/analyse", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ entries: journalEntries }) });
+      const r = await authFetch("/api/journal/analyse", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ entries: journalEntries }) });
       const d = await r.json();
       if (d.error) setJournalAnalysisError(d.error); else setJournalAnalysis(d);
     } catch { setJournalAnalysisError("Analysis failed — please try again."); }
@@ -3165,7 +3578,7 @@ export default function App() {
     if (!query) return;
     setScreenerLoading(true); setScreenerError(null); setScreenerResults(null);
     try {
-      const r = await fetch("/api/screener", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ query }) });
+      const r = await authFetch("/api/screener", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ query }) });
       const d = await r.json();
       if (d.error) setScreenerError(d.error);
       else { setScreenerResults(d); d.filter(pick => ["BUY","WATCH"].includes(pick.verdict)).forEach(pick => recordCall({...pick, priceAtCall: pick.priceStatic}, "screener")); }
@@ -3200,7 +3613,7 @@ export default function App() {
     const snapshot = buildPortfolioSnapshot(allHoldings, livePrices, audUsd);
     if (!snapshot.holdings.length) { setCoachError("No holdings available"); setCoachLoading(false); return; }
     try {
-      const r = await fetch("/api/portfolio/coach", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ snapshot }) });
+      const r = await authFetch("/api/portfolio/coach", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ snapshot }) });
       const d = await r.json();
       if (d.error) setCoachError(d.error); else setCoachReport(d);
     } catch { setCoachError("Analysis failed — check your connection"); }
@@ -3214,7 +3627,7 @@ export default function App() {
       ? `Recent EPS surprises: ${recentSurprises.map(e => `${e.date} actual ${e.epsActual} vs est ${e.epsEstimated} (${e.surprise||"?"}) `).join(", ")}.`
       : "";
     try {
-      const r = await fetch("/api/analyse", {
+      const r = await authFetch("/api/analyse", {
         method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({
           model:"claude-haiku-4-5-20251001", max_tokens:600,
@@ -3262,10 +3675,10 @@ export default function App() {
     <GlossaryCtx.Provider value={{ allGlossary, openGlossary }}>
     <>
       <style>{css}</style>
-      <div className="app-layout" style={{ display:"flex", minHeight:"100vh", background:"var(--bg)", overflow:"hidden", width:"100%" }}>
+      <div className="app-layout" style={{ display:"flex", minHeight:"100vh", overflow:"hidden", width:"100%" }}>
 
         {/* ── Sidebar ── */}
-        <aside className="app-sidebar" style={{ width:220, background:"var(--sidebar)", borderRight:"1px solid var(--border)", padding:"20px 12px", display:"flex", flexDirection:"column", position:"sticky", top:0, height:"100vh", flexShrink:0 }}>
+        <aside className="app-sidebar" style={{ width:"calc(220px + env(safe-area-inset-left, 0px))", background:"var(--sidebar)", borderRight:"1px solid var(--border)", padding:"20px 12px", paddingLeft:"calc(env(safe-area-inset-left, 0px) + 12px)", display:"flex", flexDirection:"column", position:"sticky", top:0, height:"100vh", flexShrink:0 }}>
           <div className="sidebar-header" style={{ padding:"8px 8px 24px", borderBottom:"1px solid var(--border)", marginBottom:24 }}>
             <span style={{ fontFamily:"var(--ff-head)", fontSize:20, fontWeight:900, letterSpacing:"-0.03em", color:"var(--text2)" }}>
               INTEL<span style={{ color:"var(--green)" }}>IQ</span>
@@ -3275,7 +3688,7 @@ export default function App() {
           <nav style={{ flex:1, display:"flex", flexDirection:"column", gap:4 }}>
             {TABS.map(t => (
               <button key={t.id} className={`nav-item${tab===t.id?" active":""}${!MOBILE_BAR_IDS.includes(t.id)?" mobile-hidden":""}`} onClick={()=>{setTab(t.id);setMobileMore(false);}}>
-                <span className="nav-icon" style={{ fontSize:14 }}>{t.icon}</span>
+                <span className="nav-icon" style={{ fontSize:14, width:20, textAlign:"center", flexShrink:0, display:"inline-block" }}>{t.icon}</span>
                 <span className="nav-label">{t.label}</span>
                 {t.id==="portfolio"&&allHoldings.length>0&&(
                   <span className="nav-badge" style={{ marginLeft:"auto", background:"var(--green)20", color:"var(--green)", borderRadius:6, padding:"1px 7px", fontSize:10, fontFamily:"var(--ff-mono)", border:"1px solid var(--green)40" }}>{allHoldings.length}</span>
@@ -3310,7 +3723,15 @@ export default function App() {
                 <div style={{ fontSize:9, color:"var(--muted)", fontFamily:"var(--ff-mono)" }}>Yahoo · CoinGecko</div>
               </div>
             </div>
-            <div style={{ fontSize:9, color:"var(--muted)", fontFamily:"var(--ff-mono)", letterSpacing:"0.04em" }}>{fxLabel}</div>
+            <div style={{ fontSize:9, color:"var(--muted)", fontFamily:"var(--ff-mono)", letterSpacing:"0.04em", marginBottom:10 }}>{fxLabel}</div>
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:6 }}>
+              <div style={{ fontSize:10, color:"var(--muted2)", fontFamily:"var(--ff-mono)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }} title={user.email}>
+                {user.name || user.email}
+              </div>
+              <button onClick={onLogout} style={{ background:"none", border:"1px solid var(--border)", borderRadius:6, padding:"4px 10px", fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", cursor:"pointer", letterSpacing:"0.06em", flexShrink:0 }}>
+                SIGN OUT
+              </button>
+            </div>
           </div>
         </aside>
 
@@ -3341,7 +3762,7 @@ export default function App() {
           </div>
         )}
 
-        <main ref={mainRef} className="app-main" style={{ flex:1, padding:"32px 36px", overflowY:"auto", overflowX:"hidden", minWidth:0, maxWidth:"100%" }}
+        <main ref={mainRef} className="app-main" style={{ flex:1, padding:"32px 36px", paddingRight:"calc(env(safe-area-inset-right, 0px) + 36px)", overflowY:"auto", overflowX:"hidden", minWidth:0, maxWidth:"100%", background:"var(--bg)" }}
           onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}>
 
           {/* ══ DASHBOARD ══ */}
@@ -3351,7 +3772,7 @@ export default function App() {
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:12, flexWrap:"wrap" }}>
                   <div>
                     <h1 style={{ fontFamily:"var(--ff-head)", fontSize:28, fontWeight:800, letterSpacing:"-0.03em", color:"var(--text2)", lineHeight:1.2, marginBottom:6 }}>
-                      {(()=>{const h=new Date().getHours();return h<12?"Good morning.":h<17?"Good afternoon.":"Good evening.";})()}<br/>
+                      {(()=>{const h=new Date().getHours();const firstName=(user.name||"").split(" ")[0];const g=h<12?"Good morning":h<17?"Good afternoon":"Good evening";return firstName?`${g}, ${firstName}.`:`${g}.`;})()}<br/>
                       <span style={{ color:"var(--muted2)", fontWeight:600, fontSize:22 }}>
                         {dashLoading ? (dashStatus || "Generating picks…") : dashPicks.length > 0 ? `${dashPicks.length} high-conviction picks today.` : "Today's top picks."}
                       </span>
@@ -3430,8 +3851,8 @@ export default function App() {
                 </div>
               </div>
               <div className="fu2" style={{display:"flex",gap:8,marginBottom:20}}>
-                <input value={searchQ} onChange={e=>setSearchQ(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleSearch()} placeholder="e.g. NVIDIA, BHP, Bitcoin…" style={{flex:1,background:"var(--card)",border:"1px solid var(--border)",borderRadius:10,padding:"13px 18px",color:"var(--text2)",fontSize:14}}/>
-                <button onClick={()=>handleSearch()} disabled={searching} style={{background:searching?"var(--card)":"var(--green)",color:searching?"var(--muted)":"#0a0a14",border:"none",borderRadius:10,padding:"13px 28px",fontSize:13,fontFamily:"var(--ff-head)",fontWeight:700,opacity:searching?.7:1,cursor:searching?"default":"pointer"}}>
+                <input value={searchQ} onChange={e=>setSearchQ(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleSearch()} placeholder="e.g. NVIDIA, BHP, Bitcoin…" style={{flex:1,minWidth:0,background:"var(--card)",border:"1px solid var(--border)",borderRadius:10,padding:"13px 18px",color:"var(--text2)",fontSize:14}}/>
+                <button onClick={()=>handleSearch()} disabled={searching} style={{background:searching?"var(--card)":"var(--green)",color:searching?"var(--muted)":"#0a0a14",border:"none",borderRadius:10,padding:"13px 16px",fontSize:13,fontFamily:"var(--ff-head)",fontWeight:700,opacity:searching?.7:1,cursor:searching?"default":"pointer",flexShrink:0,whiteSpace:"nowrap"}}>
                   {searching?(searchStatus||"Analysing…"):"Analyse →"}
                 </button>
               </div>
@@ -3651,12 +4072,12 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="fu2" style={{display:"flex",gap:6,marginBottom:24,flexWrap:"wrap"}}>
+              <div style={{display:"flex",gap:6,marginBottom:24,overflowX:"auto",WebkitOverflowScrolling:"touch",paddingBottom:4}}>
                 {PORT_TABS.map(t=>{
                   const count=t.id==="all"?allHoldings.length:t.id==="coinbase"?cbHoldings.length:t.id==="binance"?bnHoldings.length:t.id==="tiger"?tigerHoldings.length:t.id==="ledger"?ldgHoldings.length:cmcHoldings.length;
                   const isActive=portTab===t.id;
                   return (
-                    <button key={t.id} onClick={()=>setPortTab(t.id)} style={{background:isActive?`${t.color}18`:"none",border:`1px solid ${isActive?`${t.color}50`:"var(--border)"}`,borderRadius:10,padding:"8px 20px",fontSize:12,fontWeight:isActive?600:400,color:isActive?t.color:"var(--muted2)"}}>
+                    <button key={t.id} onClick={()=>setPortTab(t.id)} style={{background:isActive?`${t.color}18`:"none",border:`1px solid ${isActive?`${t.color}50`:"var(--border)"}`,borderRadius:10,padding:"8px 20px",fontSize:12,fontWeight:isActive?600:400,color:isActive?t.color:"var(--muted2)",flexShrink:0,whiteSpace:"nowrap"}}>
                       {t.label}{count>0&&<span style={{marginLeft:7,fontSize:10,fontFamily:"var(--ff-mono)",opacity:.7}}>{count}</span>}
                     </button>
                   );
@@ -3667,11 +4088,11 @@ export default function App() {
                 allHoldings.length>0 ? (
                   <>
                     <div className="fu"><SummaryStrip holdings={allHoldings} livePrices={livePrices} displayCcy={displayCcy} audUsd={audUsd}/></div>
-                    <div className="fu"><PortfolioChart holdings={allHoldings} displayCcy={displayCcy} audUsd={audUsd}/></div>
-                    <div className="fu"><BenchmarkStrip holdings={allHoldings} livePrices={livePrices} audUsd={audUsd}/></div>
+                    <div className="fu"><PortfolioChart holdings={allHoldings} displayCcy={displayCcy} audUsd={audUsd} authFetch={authFetch}/></div>
+                    <div className="fu"><BenchmarkStrip holdings={allHoldings} livePrices={livePrices} audUsd={audUsd} authFetch={authFetch}/></div>
                     <div className="fu"><AllocationPanel holdings={allHoldings} livePrices={livePrices} audUsd={audUsd} displayCcy={displayCcy}/></div>
-                    <div className="fu"><RiskPanel holdings={allHoldings} audUsd={audUsd}/></div>
-                    <div className="fu"><DividendPanel holdings={allHoldings} livePrices={livePrices} audUsd={audUsd} displayCcy={displayCcy}/></div>
+                    <div className="fu"><RiskPanel holdings={allHoldings} audUsd={audUsd} authFetch={authFetch}/></div>
+                    <div className="fu"><DividendPanel holdings={allHoldings} livePrices={livePrices} audUsd={audUsd} displayCcy={displayCcy} authFetch={authFetch}/></div>
                     <div className="fu2">
                       <div className="section-label">ALL HOLDINGS</div>
                       <div style={{display:"grid",gap:8}}>
@@ -3795,7 +4216,7 @@ export default function App() {
                   {cmcHoldings.length>0&&(
                     <div style={{display:"grid",gap:8}}>
                       {cmcHoldings.map(h=>(
-                        <HoldingRow key={h.sym} holding={h} livePrice={livePrices[h.sym]} expanded={portExp===`cmc-${h.sym}`} onToggle={()=>setPortExp(p=>p===`cmc-${h.sym}`?null:`cmc-${h.sym}`)} onRemove={()=>setCmc(p=>p.filter(x=>x.sym!==h.sym))} onViewChart={()=>openDetail({sym:h.sym,name:h.name,priceType:h.priceType,priceCurrency:h.priceCurrency||"USD",sector:h.sector})} displayCcy={displayCcy} audUsd={audUsd}/>
+                        <HoldingRow key={h.sym} holding={h} livePrice={livePrices[h.sym]} expanded={portExp===`cmc-${h.sym}`} onToggle={()=>setPortExp(p=>p===`cmc-${h.sym}`?null:`cmc-${h.sym}`)} onRemove={()=>setCmc(p=>p.filter(x=>x.sym!==h.sym))} onViewChart={()=>openDetail({sym:h.sym,name:h.name,priceType:h.priceType,priceCurrency:h.priceCurrency||"USD",sector:h.sector})} displayCcy={displayCcy} audUsd={audUsd} dividendInfo={(() => { const yf = cmcDivDates[h.sym]; const yld = h.divYieldPct > 0 ? h.divYieldPct / 100 : (yf?.yield || null); if (!yld) return null; return { yield: yld, mostRecentDividend: h.divCents > 0 ? h.divCents / 100 : (yf?.annualDPS || null), annualDivPerShare: h.divCents > 0 ? h.divCents / 100 : (yf?.annualDPS || null), frankingPct: h.frankingPct || 0, exDivDate: yf?.exDivDate || null, paymentDate: yf?.payDate || null }; })()}/>
                       ))}
                     </div>
                   )}
@@ -3813,7 +4234,7 @@ export default function App() {
                     <h1 style={{fontFamily:"var(--ff-head)",fontSize:26,fontWeight:800,color:"var(--text2)",marginBottom:6}}>Macro Calendar</h1>
                     <p style={{fontSize:13,color:"var(--muted2)"}}>Upcoming central bank decisions and data releases — contextualised against your portfolio.</p>
                   </div>
-                  <button onClick={()=>{setMacroEvents([]);setMacroError(null);setMacroLoading(true);const syms=[...new Set([...allHoldings.map(h=>h.sym),...watchlist.map(w=>w.sym)])];fetch("/api/macro",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({holdingSyms:syms})}).then(r=>r.json()).then(d=>{if(d.error)setMacroError(d.error);else setMacroEvents(d);}).catch(()=>setMacroError("Failed")).finally(()=>setMacroLoading(false));}} disabled={macroLoading} style={{background:"none",border:"1px solid var(--border)",borderRadius:8,padding:"7px 16px",fontSize:10,color:macroLoading?"var(--muted)":"var(--muted2)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",opacity:macroLoading?.5:1}}>
+                  <button onClick={()=>{setMacroEvents([]);setMacroError(null);setMacroLoading(true);const syms=[...new Set([...allHoldings.map(h=>h.sym),...watchlist.map(w=>w.sym)])];authFetch("/api/macro",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({holdingSyms:syms})}).then(r=>r.json()).then(d=>{if(d.error)setMacroError(d.error);else setMacroEvents(d);}).catch(()=>setMacroError("Failed")).finally(()=>setMacroLoading(false));}} disabled={macroLoading} style={{background:"none",border:"1px solid var(--border)",borderRadius:8,padding:"7px 16px",fontSize:10,color:macroLoading?"var(--muted)":"var(--muted2)",fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",opacity:macroLoading?.5:1}}>
                     {macroLoading?"↻ LOADING…":"↻ REFRESH"}
                   </button>
                 </div>
@@ -3971,7 +4392,7 @@ export default function App() {
                             </div>
                           </div>
 
-                          <div style={{display:"flex",gap:20,alignItems:"center"}}>
+                          <div style={{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
                             <div style={{textAlign:"right"}}>
                               <div style={{fontSize:9,fontFamily:"var(--ff-mono)",color:"var(--muted)",letterSpacing:"0.1em",marginBottom:4}}>PRICE</div>
                               {dispPrice != null
@@ -3992,13 +4413,13 @@ export default function App() {
                               </div>
                             )}
 
-                            <button onClick={()=>openDetail({sym:w.sym,name:w.name,priceType:w.priceType,priceCurrency:w.priceCurrency,sector:w.sector})} style={{background:"none",border:"1px solid var(--border)",borderRadius:8,padding:"7px 14px",color:"var(--muted2)",fontSize:11,fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",flexShrink:0}}>
+                            <button onClick={()=>openDetail({sym:w.sym,name:w.name,priceType:w.priceType,priceCurrency:w.priceCurrency,sector:w.sector})} style={{background:"none",border:"1px solid var(--border)",borderRadius:8,padding:"7px 10px",color:"var(--muted2)",fontSize:10,fontFamily:"var(--ff-mono)",letterSpacing:"0.06em"}}>
                               CHART
                             </button>
-                            <button onClick={()=>{setAlertEditSym(p=>p===w.sym?null:w.sym);const ex=alerts[w.sym];setAlertFormVal(ex?{type:ex.type,value:ex.value,note:ex.note||""}:{type:"price_above",value:"",note:""}); }} style={{background:alerts[w.sym]?`${triggeredAlerts.includes(w.sym)?"var(--amber)":"var(--purple)"}18`:"none",border:`1px solid ${alerts[w.sym]?(triggeredAlerts.includes(w.sym)?"var(--amber)40":"var(--purple)40"):"var(--border)"}`,borderRadius:8,padding:"7px 14px",color:alerts[w.sym]?(triggeredAlerts.includes(w.sym)?"var(--amber)":"var(--purple)"):"var(--muted2)",fontSize:11,fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",flexShrink:0}}>
+                            <button onClick={()=>{setAlertEditSym(p=>p===w.sym?null:w.sym);const ex=alerts[w.sym];setAlertFormVal(ex?{type:ex.type,value:ex.value,note:ex.note||""}:{type:"price_above",value:"",note:""}); }} style={{background:alerts[w.sym]?`${triggeredAlerts.includes(w.sym)?"var(--amber)":"var(--purple)"}18`:"none",border:`1px solid ${alerts[w.sym]?(triggeredAlerts.includes(w.sym)?"var(--amber)40":"var(--purple)40"):"var(--border)"}`,borderRadius:8,padding:"7px 10px",color:alerts[w.sym]?(triggeredAlerts.includes(w.sym)?"var(--amber)":"var(--purple)"):"var(--muted2)",fontSize:10,fontFamily:"var(--ff-mono)",letterSpacing:"0.06em"}}>
                               {triggeredAlerts.includes(w.sym)?"🔔 ALERT":alerts[w.sym]?"◎ ALERT":"+ ALERT"}
                             </button>
-                            <button onClick={()=>setWatchlist(prev=>prev.filter(x=>x.sym!==w.sym))} style={{background:"#ff525218",border:"1px solid #ff525240",borderRadius:8,padding:"7px 14px",color:"var(--red)",fontSize:11,fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",flexShrink:0}}>
+                            <button onClick={()=>setWatchlist(prev=>prev.filter(x=>x.sym!==w.sym))} style={{background:"#ff525218",border:"1px solid #ff525240",borderRadius:8,padding:"7px 10px",color:"var(--red)",fontSize:10,fontFamily:"var(--ff-mono)",letterSpacing:"0.06em"}}>
                               REMOVE
                             </button>
                           </div>
@@ -4709,6 +5130,137 @@ export default function App() {
             </div>
           )}
 
+          {/* ══ INDICES ══ */}
+          {tab==="indices"&&(
+            <div>
+              <div className="fu" style={{marginBottom:24}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap"}}>
+                  <div>
+                    <h1 style={{fontFamily:"var(--ff-head)",fontSize:26,fontWeight:800,color:"var(--text2)",marginBottom:6}}>Market Indices</h1>
+                    <p style={{fontSize:13,color:"var(--muted2)"}}>Major market indices with AI-powered analysis.</p>
+                  </div>
+                </div>
+              </div>
+
+              {indicesLoading && (
+                <div style={{display:"grid",gap:10}}>
+                  {[1,2,3].map(i=><div key={i} className="card shimmer-el" style={{height:90}}/>)}
+                </div>
+              )}
+
+              {indicesData && indicesData.length > 0 && (
+                <div>
+                  {/* ── Overlay % change line chart ── */}
+                  <div className="card" style={{padding:16,marginBottom:14}}>
+                    <div style={{fontSize:10,fontFamily:"var(--ff-mono)",color:"var(--muted)",letterSpacing:"0.06em",marginBottom:10}}>1-MONTH % CHANGE</div>
+                    <canvas ref={el=>{
+                      if(!el) return;
+                      const COLORS={"^AORD":"#ffab40","^IXIC":"#448aff","^DJI":"#00e676"};
+                      const dpr=window.devicePixelRatio||1;
+                      const W=el.parentElement.clientWidth-32;
+                      const H=180;
+                      el.width=W*dpr; el.height=H*dpr;
+                      el.style.width="100%"; el.style.height=H+"px";
+                      const ctx=el.getContext("2d");
+                      ctx.setTransform(dpr,0,0,dpr,0,0);
+                      // Find global date range and % range
+                      let allPcts=[];
+                      for(const idx of indicesData){if(idx.series) idx.series.forEach(p=>allPcts.push(p.pct));}
+                      if(!allPcts.length) return;
+                      const minPct=Math.min(...allPcts);
+                      const maxPct=Math.max(...allPcts);
+                      const pad=(maxPct-minPct)*0.15||0.5;
+                      const yMin=minPct-pad, yMax=maxPct+pad;
+                      let allTs=[];
+                      for(const idx of indicesData){if(idx.series) idx.series.forEach(p=>allTs.push(p.t));}
+                      const tMin=Math.min(...allTs), tMax=Math.max(...allTs);
+                      const mL=40,mR=12,mT=12,mB=28;
+                      const cW=W-mL-mR, cH=H-mT-mB;
+                      const toX=t=>mL+((t-tMin)/(tMax-tMin||1))*cW;
+                      const toY=p=>mT+((yMax-p)/(yMax-yMin||1))*cH;
+                      // Background
+                      ctx.fillStyle="var(--card)"; ctx.fillRect(0,0,W,H);
+                      // 0% line
+                      const zeroY=toY(0);
+                      ctx.strokeStyle="rgba(255,255,255,0.1)"; ctx.lineWidth=1;
+                      ctx.beginPath(); ctx.moveTo(mL,zeroY); ctx.lineTo(W-mR,zeroY); ctx.stroke();
+                      ctx.fillStyle="rgba(255,255,255,0.3)"; ctx.font="9px var(--ff-mono)"; ctx.textAlign="right";
+                      ctx.fillText("0%",mL-4,zeroY+3);
+                      // Y axis labels
+                      const ySteps=[yMin,yMax];
+                      for(const v of ySteps){
+                        const y=toY(v);
+                        ctx.fillStyle="rgba(255,255,255,0.2)";
+                        ctx.fillText((v>=0?"+":"")+v.toFixed(1)+"%",mL-4,y+3);
+                      }
+                      // Draw lines + legend
+                      let legendX=mL;
+                      for(const idx of indicesData){
+                        if(!idx.series||idx.series.length<2) continue;
+                        const col=COLORS[idx.sym]||"#888";
+                        ctx.strokeStyle=col; ctx.lineWidth=1.5; ctx.lineJoin="round";
+                        ctx.beginPath();
+                        idx.series.forEach((p,i)=>{
+                          const x=toX(p.t), y=toY(p.pct);
+                          i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+                        });
+                        ctx.stroke();
+                        // Legend
+                        ctx.fillStyle=col; ctx.font="bold 9px var(--ff-mono)"; ctx.textAlign="left";
+                        ctx.fillText(idx.name,legendX,H-4);
+                        legendX+=ctx.measureText(idx.name).width+14;
+                      }
+                      // X axis dates
+                      ctx.fillStyle="rgba(255,255,255,0.3)"; ctx.font="8px var(--ff-mono)"; ctx.textAlign="center";
+                      const refSeries=indicesData.find(i=>i.series)?.series||[];
+                      const step=Math.max(1,Math.floor(refSeries.length/5));
+                      for(let i=0;i<refSeries.length;i+=step){
+                        const d=new Date(refSeries[i].t);
+                        ctx.fillText(`${d.getDate()}/${d.getMonth()+1}`,toX(refSeries[i].t),H-mB+14);
+                      }
+                    }} style={{display:"block"}}/>
+                  </div>
+                  {/* ── Index cards ── */}
+                  <div style={{display:"grid",gap:10}}>
+                    {indicesData.map(idx => {
+                      const colors = {"^AORD":"var(--amber)","^IXIC":"var(--blue)","^DJI":"var(--green)"};
+                      const accent = colors[idx.sym] || "var(--border2)";
+                      return (
+                        <button key={idx.sym} className="card" onClick={()=>openDetail({sym:idx.sym,name:idx.name,priceType:"index",priceCurrency:"USD"})} style={{padding:"20px 24px",borderLeft:`3px solid ${accent}`,cursor:"pointer",textAlign:"left",width:"100%",background:"var(--card)",border:"1px solid var(--border)",borderLeftWidth:3,borderLeftColor:accent}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12}}>
+                            <div style={{minWidth:0}}>
+                              <span style={{fontFamily:"var(--ff-head)",fontSize:18,fontWeight:700,color:"var(--text2)"}}>{idx.name}</span>
+                              <div style={{fontSize:10,fontFamily:"var(--ff-mono)",color:"var(--muted)",letterSpacing:"0.06em",marginTop:4}}>{idx.sym}</div>
+                            </div>
+                            <div style={{textAlign:"right",flexShrink:0}}>
+                              <div style={{fontFamily:"var(--ff-mono)",fontSize:18,fontWeight:600,color:"var(--text2)",marginBottom:3}}>
+                                {idx.price?.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})} pts
+                              </div>
+                              {idx.change1 != null && (
+                                <div style={{fontFamily:"var(--ff-mono)",fontSize:11,color:idx.change1>=0?"var(--green)":"var(--red)"}}>
+                                  {idx.day1Date}: {idx.change1>=0?"+":""}{idx.change1.toFixed(2)}%
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          <div style={{marginTop:10,display:"flex",justifyContent:"flex-end"}}>
+                            <span style={{fontSize:10,fontFamily:"var(--ff-mono)",color:accent,letterSpacing:"0.06em"}}>VIEW CHART & ANALYSIS →</span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {!indicesLoading && (!indicesData || indicesData.length === 0) && (
+                <div className="card" style={{padding:40,textAlign:"center"}}>
+                  <p style={{color:"var(--muted)",fontSize:13}}>Could not load indices data. Try again later.</p>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* ══ DETAIL / CHART ══ */}
           {tab==="detail"&&(
             <div>
@@ -4728,18 +5280,20 @@ export default function App() {
                       {/* price row */}
                       <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",marginBottom:12}}>
                         {chartData && (() => {
+                          const isIdx = detailSym?.priceType === "index";
                           const rawPrice = chartData.currentPrice;
-                          const dispPrice = toDisplay(rawPrice, chartData.currency, displayCcy, audUsd);
-                          const dispPrev  = toDisplay(chartData.previousClose, chartData.currency, displayCcy, audUsd);
+                          const dispPrice = isIdx ? rawPrice : toDisplay(rawPrice, chartData.currency, displayCcy, audUsd);
+                          const dispPrev  = isIdx ? chartData.previousClose : toDisplay(chartData.previousClose, chartData.currency, displayCcy, audUsd);
                           const chg = dispPrev ? ((dispPrice - dispPrev) / dispPrev) * 100 : null;
-                          const symbol = displayCcy === "AUD" ? "A$" : "$";
+                          const symbol = isIdx ? "" : (displayCcy === "AUD" ? "A$" : "$");
+                          const suffix = isIdx ? " pts" : "";
                           return (
                             <>
                               <span style={{fontFamily:"var(--ff-mono)",fontSize:22,fontWeight:600,color:"var(--text2)"}}>
-                                {symbol}{dispPrice?.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:dispPrice>=10?2:4})}
+                                {symbol}{dispPrice?.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:dispPrice>=10?2:4})}{suffix}
                               </span>
                               {chg != null && <span style={{fontFamily:"var(--ff-mono)",fontSize:13,color:chg>=0?"var(--green)":"var(--red)"}}>{chg>=0?"+":""}{chg.toFixed(2)}%</span>}
-                              <span style={{fontSize:11,color:"var(--muted)",fontFamily:"var(--ff-mono)"}}>{displayCcy}</span>
+                              {!isIdx && <span style={{fontSize:11,color:"var(--muted)",fontFamily:"var(--ff-mono)"}}>{displayCcy}</span>}
                             </>
                           );
                         })()}
@@ -4758,7 +5312,7 @@ export default function App() {
                               <VerdictBadge v={detailAnalysis.verdict}/>
                               <ConvictionDots level={detailAnalysis.conviction}/>
                               {detailAnalysis.horizon && <span style={{fontSize:11,fontFamily:"var(--ff-mono)",color:"var(--muted2)"}}>{detailAnalysis.horizon} term</span>}
-                              {detailAnalysis.target && <span style={{fontSize:11,fontFamily:"var(--ff-mono)",color:"var(--muted2)"}}>Target {detailAnalysis.target}</span>}
+                              {detailAnalysis.target && <span style={{fontSize:11,fontFamily:"var(--ff-mono)",color:"var(--muted2)"}}>Target {detailSym?.priceType==="index" ? detailAnalysis.target.replace(/\$/g,"") + " pts" : detailAnalysis.target}</span>}
                             </div>
                           </div>
                         )}
@@ -4775,7 +5329,7 @@ export default function App() {
                           ↔ TRADE
                         </button>
                       )}
-                      <CurrencyToggle value={displayCcy} onChange={setDisplayCcy}/>
+                      {detailSym?.priceType!=="index"&&<CurrencyToggle value={displayCcy} onChange={setDisplayCcy}/>}
                     </div>
                   </div>
                 )}
@@ -4783,17 +5337,44 @@ export default function App() {
 
               {/* range selector */}
               <div style={{display:"flex",gap:4,marginBottom:12,alignItems:"center",justifyContent:"space-between",flexWrap:"wrap"}}>
-                <div style={{display:"flex",gap:4}}>
+                <div style={{display:"flex",gap:4,alignItems:"center",flexWrap:"wrap"}}>
                   {["1d","7d","1mo","3mo","1y"].map(r=>(
                     <button key={r} onClick={()=>setChartRange(r)} style={{background:chartRange===r?"var(--green)":"none",color:chartRange===r?"#0a0a14":"var(--muted2)",border:`1px solid ${chartRange===r?"var(--green)":"var(--border)"}`,borderRadius:7,padding:"5px 14px",fontSize:11,fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",fontWeight:chartRange===r?700:400}}>
                       {r.toUpperCase()}
                     </button>
                   ))}
+                  {chartRange==="1d"&&(
+                    <>
+                      <button onClick={()=>setLiveMode(m=>!m)} style={{background:liveMode?"#00e67620":"none",color:liveMode?"var(--green)":"var(--muted2)",border:`1px solid ${liveMode?"#00e67640":"var(--border)"}`,borderRadius:7,padding:"5px 12px",fontSize:11,fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",fontWeight:liveMode?700:400,marginLeft:4}}>
+                        {liveMode?<><span style={{display:"inline-block",width:6,height:6,borderRadius:"50%",background:"var(--green)",marginRight:5,animation:"pulse 1.5s infinite"}}/>LIVE</>:"○ LIVE"}
+                      </button>
+                      {liveMode&&(
+                        <div style={{display:"flex",gap:2,marginLeft:2}}>
+                          {[{s:10,l:"10s"},{s:30,l:"30s"},{s:60,l:"1m"},{s:300,l:"5m"}].map(({s,l})=>(
+                            <button key={s} onClick={()=>setLiveInterval(s)} style={{background:liveInterval===s?"var(--surface)":"none",color:liveInterval===s?"var(--text2)":"var(--muted)",border:`1px solid ${liveInterval===s?"var(--border)":"transparent"}`,borderRadius:5,padding:"3px 8px",fontSize:9,fontFamily:"var(--ff-mono)"}}>
+                              {l}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  )}
                 </div>
                 <button onClick={()=>openGlossary()} style={{background:"none",border:"1px solid var(--border)",borderRadius:7,padding:"5px 14px",fontSize:11,fontFamily:"var(--ff-mono)",letterSpacing:"0.06em",color:"var(--amber)"}}>
                   ◈ GLOSSARY
                 </button>
               </div>
+              {liveMode&&(liveLastUpdate||chartData?.marketState)&&(()=>{
+                const isClosed = chartData?.marketState && chartData.marketState !== "REGULAR";
+                const isCrypto = detailSym?.priceType === "crypto";
+                return <div style={{fontSize:10,fontFamily:"var(--ff-mono)",color:isClosed && !isCrypto ? "var(--amber)" : "var(--green)",marginBottom:8,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                  <span style={{width:6,height:6,borderRadius:"50%",background:isClosed && !isCrypto ? "var(--amber)" : "var(--green)",animation:"pulse 1.5s infinite"}}/>
+                  {isClosed && !isCrypto
+                    ? `Market closed — showing last trading day data · updates every ${liveInterval<60?`${liveInterval}s`:`${liveInterval/60}m`}`
+                    : `Live · updates every ${liveInterval<60?`${liveInterval}s`:`${liveInterval/60}m`}${liveLastUpdate ? ` · last update ${new Date(liveLastUpdate).toLocaleTimeString()}` : ""}`
+                  }
+                </div>;
+              })()}
 
               {/* chart */}
               <div className="card" style={{padding:12,marginBottom:16,overflow:"hidden"}}>
@@ -4806,7 +5387,7 @@ export default function App() {
                   </div>
                 )}
                 {!chartLoading && chartData?.candles?.length > 0 && (
-                  <ChartCanvas candles={chartData.candles} analysis={detailAnalysis} range={chartRange} currency={chartData.currency} indicators={chartData.indicators} displayCcy={displayCcy} audUsd={audUsd}/>
+                  <ChartCanvas candles={chartData.candles} analysis={detailAnalysis} range={chartRange} currency={chartData.currency} indicators={chartData.indicators} displayCcy={displayCcy} audUsd={audUsd} priceType={detailSym?.priceType}/>
                 )}
                 {!chartLoading && !chartData && (
                   <div style={{height:420,display:"flex",alignItems:"center",justifyContent:"center"}}>
@@ -4923,7 +5504,7 @@ export default function App() {
         </main>
       </div>
       {tradeModal && (
-        <TradeModal config={tradeModal} onClose={()=>setTradeModal(null)} onSuccess={(ex)=>{setTradeModal(null);if(ex==="binance")syncBinance();else if(ex==="tiger"){syncTiger();syncTigerOrders();}else syncCoinbase();}} displayCcy={displayCcy} audUsd={audUsd} />
+        <TradeModal config={tradeModal} onClose={()=>setTradeModal(null)} onSuccess={(ex)=>{setTradeModal(null);if(ex==="binance")syncBinance();else if(ex==="tiger"){syncTiger();syncTigerOrders();}else syncCoinbase();}} displayCcy={displayCcy} audUsd={audUsd} authFetch={authFetch} />
       )}
       <GlossaryModal open={glossaryOpen} onClose={()=>setGlossaryOpen(false)} focusTerm={glossaryTerm} allGlossary={allGlossary}/>
     </>

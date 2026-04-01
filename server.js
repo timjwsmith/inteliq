@@ -4,9 +4,18 @@ const fetch = require("node-fetch");
 const crypto = require("crypto");
 require("dotenv").config();
 
+// Database & auth
+require("./db"); // initialize SQLite
+const { router: authRouter, requireAuth } = require("./auth");
+const userDataRouter = require("./user-data");
+
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// Mount auth & user data routes
+app.use("/api/auth", authRouter);
+app.use("/api/user-data", userDataRouter);
 
 const PORT = process.env.PORT || 3001;
 const ANTHROPIC_API_KEY   = process.env.ANTHROPIC_API_KEY;
@@ -36,7 +45,7 @@ if (!ANTHROPIC_API_KEY) {
 }
 
 // ── Explorer search (mobile-friendly — builds prompt server-side) ─────────
-app.post("/api/explorer/search", async (req, res) => {
+app.post("/api/explorer/search", requireAuth, async (req, res) => {
   const { query } = req.body;
   if (!query) return res.status(400).json({ error: "query required" });
   const today = new Date().toLocaleDateString("en-AU", { weekday:"long", year:"numeric", month:"long", day:"numeric" });
@@ -98,7 +107,7 @@ app.post("/api/explorer/search", async (req, res) => {
 });
 
 // ── Anthropic proxy ────────────────────────────────────────────────────────
-app.post("/api/analyse", async (req, res) => {
+app.post("/api/analyse", requireAuth, async (req, res) => {
   try {
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -118,7 +127,7 @@ app.post("/api/analyse", async (req, res) => {
 });
 
 // ── Streaming analyse proxy (SSE) ────────────────────────────────────────────
-app.post("/api/analyse/stream", async (req, res) => {
+app.post("/api/analyse/stream", requireAuth, async (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
@@ -217,7 +226,7 @@ function coinbaseJWT(method, path) {
   }
 }
 
-app.get("/api/coinbase/balances", async (req, res) => {
+app.get("/api/coinbase/balances", requireAuth, async (req, res) => {
   if (!COINBASE_API_KEY || !COINBASE_API_SECRET) {
     return res.status(503).json({ error: "Coinbase API keys not configured — add COINBASE_API_KEY and COINBASE_API_SECRET to .env" });
   }
@@ -439,7 +448,7 @@ async function binanceFetch(method, path, params = {}) {
   return r.json();
 }
 
-app.get("/api/binance/balances", async (req, res) => {
+app.get("/api/binance/balances", requireAuth, async (req, res) => {
   if (!BINANCE_API_KEY || !BINANCE_API_SECRET) {
     return res.status(503).json({ error: "Binance API keys not configured — add BINANCE_API_KEY and BINANCE_API_SECRET to .env" });
   }
@@ -483,7 +492,7 @@ app.get("/api/binance/balances", async (req, res) => {
   }
 });
 
-app.get("/api/binance/usdt-balance", async (req, res) => {
+app.get("/api/binance/usdt-balance", requireAuth, async (req, res) => {
   if (!BINANCE_API_KEY || !BINANCE_API_SECRET) {
     return res.status(503).json({ error: "Binance API keys not configured" });
   }
@@ -506,7 +515,7 @@ app.get("/api/binance/usdt-balance", async (req, res) => {
   }
 });
 
-app.post("/api/binance/order", async (req, res) => {
+app.post("/api/binance/order", requireAuth, async (req, res) => {
   if (!BINANCE_API_KEY || !BINANCE_API_SECRET) {
     return res.status(503).json({ error: "Binance API keys not configured" });
   }
@@ -547,7 +556,7 @@ app.post("/api/binance/order", async (req, res) => {
   }
 });
 
-app.get("/api/binance/ticker/:sym", async (req, res) => {
+app.get("/api/binance/ticker/:sym", requireAuth, async (req, res) => {
   const sym = req.params.sym.toUpperCase();
   try {
     // Use USDT pair (AUD pairs on Binance have no liquidity)
@@ -593,7 +602,7 @@ async function tigerFetch(method, bizContent = {}) {
   return d.data;
 }
 
-app.get("/api/tiger/balances", async (req, res) => {
+app.get("/api/tiger/balances", requireAuth, async (req, res) => {
   if (!TIGER_ID || !TIGER_PRIVATE_KEY) {
     return res.status(503).json({ error: "Tiger API not configured — add TIGER_ID and private key to .env" });
   }
@@ -635,7 +644,7 @@ app.get("/api/tiger/balances", async (req, res) => {
   }
 });
 
-app.get("/api/tiger/assets", async (req, res) => {
+app.get("/api/tiger/assets", requireAuth, async (req, res) => {
   if (!TIGER_ID || !TIGER_PRIVATE_KEY) {
     return res.status(503).json({ error: "Tiger API not configured" });
   }
@@ -656,7 +665,7 @@ app.get("/api/tiger/assets", async (req, res) => {
   }
 });
 
-app.post("/api/tiger/order", async (req, res) => {
+app.post("/api/tiger/order", requireAuth, async (req, res) => {
   if (!TIGER_ID || !TIGER_PRIVATE_KEY) {
     return res.status(503).json({ error: "Tiger API not configured" });
   }
@@ -698,7 +707,7 @@ app.post("/api/tiger/order", async (req, res) => {
   }
 });
 
-app.get("/api/tiger/orders", async (req, res) => {
+app.get("/api/tiger/orders", requireAuth, async (req, res) => {
   if (!TIGER_ID || !TIGER_PRIVATE_KEY) {
     return res.status(503).json({ error: "Tiger API not configured" });
   }
@@ -954,6 +963,7 @@ app.get("/api/chart/:sym", async (req, res) => {
       currency: meta.currency || "USD",
       currentPrice: meta.regularMarketPrice,
       previousClose: meta.chartPreviousClose || meta.previousClose,
+      marketState: meta.marketState || null,
       candles, range, indicators,
     });
   } catch (err) {
@@ -1015,8 +1025,8 @@ app.get("/api/fundamentals/:sym", async (req, res) => {
 });
 
 // ── Detailed technical analysis with chart annotations ─────────────────────
-app.post("/api/analyse/detail", async (req, res) => {
-  const { sym, name, candles, range, currentPrice, currency, indicators, fundamentals, initialVerdict } = req.body;
+app.post("/api/analyse/detail", requireAuth, async (req, res) => {
+  const { sym, name, candles, range, currentPrice, currency, indicators, fundamentals, initialVerdict, isIndex } = req.body;
   if (!sym || !candles?.length) return res.status(400).json({ error: "sym and candles required" });
 
   const recent = candles.slice(-40);
@@ -1092,6 +1102,18 @@ app.post("/api/analyse/detail", async (req, res) => {
     if (lines.length) indicatorsBlock = `\n\nCOMPUTED TECHNICAL INDICATORS (calculated from the live OHLCV data above):\n${lines.join("\n")}\nReference these computed values in your technical analysis section.`;
   }
 
+  const indexPrompt = isIndex ? `You are a senior market analyst. Today is ${new Date().toLocaleDateString("en-AU",{year:"numeric",month:"long",day:"numeric"})}. You have been given live OHLCV chart data for a market INDEX (not a tradeable stock). Using this chart data AND your knowledge of the index's composition, macro environment, sector rotation, and market conditions as of today, produce a single unified market outlook with ONE verdict. The current level is the closing price of the most recent candle. Return ONLY valid JSON (no markdown fences):
+{"verdict":"BULLISH|NEUTRAL|BEARISH","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","target":"X (number only, no $ sign, this is points not dollars)","summary":"2-3 sentences combining all factors","macro":"2-3 sentences on macro environment driving this index","fundamental":"2-3 sentences on constituent earnings, valuations, sector weights","technical":"2-3 sentences based on the chart data","sentiment":"2-3 sentences on market breadth and investor sentiment","portfolio":"2-3 sentences on what this means for investors","support":[{"price":0.0,"label":"Label","strength":"STRONG|MEDIUM|WEAK"}],"resistance":[{"price":0.0,"label":"Label","strength":"STRONG|MEDIUM|WEAK"}],"pattern":{"name":"Pattern name or null","bullish":true,"note":"1 sentence"},"momentum":"1-2 sentences","volume":"1 sentence"}
+IMPORTANT: This is a market index measured in POINTS, not dollars. Never use $ signs anywhere in your response. Targets, support, and resistance are all in index points.
+Horizon definitions: Short = up to 3 months; Medium = 3 months to 1 year; Long = 1 year or more.
+Match your horizon to the chart range: 1mo = Short, 3mo = Short, 6mo = Medium, 1y = Medium, 5y = Long.
+Provide 1-3 support and 1-3 resistance levels using actual index levels from the data.${fundamentalsBlock}${indicatorsBlock}` : `You are a senior investment analyst. Today is ${new Date().toLocaleDateString("en-AU",{year:"numeric",month:"long",day:"numeric"})}. You have been given live OHLCV chart data for this asset. Using this chart data AND your knowledge of the asset's fundamentals, sector dynamics, macro environment, and market conditions as of today, produce a single unified investment analysis with ONE verdict. Integrate technical signals from the chart with fundamental and macro factors — do not treat them as separate signals. The current live price is the closing price of the most recent candle. Return ONLY valid JSON (no markdown fences):
+{"verdict":"BUY|WATCH|AVOID|HOLD","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","target":"$X","stopLoss":"$X","summary":"2-3 sentences combining all factors","macro":"2-3 sentences","fundamental":"2-3 sentences","technical":"2-3 sentences based on the chart data","sentiment":"2-3 sentences","portfolio":"2-3 sentences","support":[{"price":0.0,"label":"Label","strength":"STRONG|MEDIUM|WEAK"}],"resistance":[{"price":0.0,"label":"Label","strength":"STRONG|MEDIUM|WEAK"}],"pattern":{"name":"Pattern name or null","bullish":true,"note":"1 sentence"},"momentum":"1-2 sentences","volume":"1 sentence"}
+Horizon definitions: Short = up to 3 months; Medium = 3 months to 1 year; Long = 1 year or more.
+Match your horizon to the chart range: 1mo = Short, 3mo = Short, 6mo = Medium, 1y = Medium, 5y = Long.
+CRITICAL: Your target price MUST be realistic relative to the current live price (${currentPrice} ${currency}). For BUY: target above current price. For AVOID: target below. A Short-term target should be within ~5-15% of current price, Medium ~10-30%, Long ~15-50%. Never use prices from memory — only use the live data provided.
+Provide 1-3 support and 1-3 resistance levels using actual prices from the data.${initialVerdict ? `\n\nIMPORTANT: The initial analysis gave a verdict of "${initialVerdict}". Your detailed analysis should be consistent with this verdict unless the live chart data and indicators provide strong, clear evidence to the contrary. Do not downgrade a BUY to WATCH simply due to normal uncertainty — only change the verdict if the technical data materially contradicts it.` : ""}${fundamentalsBlock}${indicatorsBlock}`;
+
   try {
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -1099,11 +1121,7 @@ app.post("/api/analyse/detail", async (req, res) => {
       body: JSON.stringify({
         model: "claude-sonnet-4-20250514",
         max_tokens: 1500, temperature: 0.3,
-        system: `You are a senior investment analyst. Today is ${new Date().toLocaleDateString("en-AU",{year:"numeric",month:"long",day:"numeric"})}. You have been given live OHLCV chart data for this asset. Using this chart data AND your knowledge of the asset's fundamentals, sector dynamics, macro environment, and market conditions as of today, produce a single unified investment analysis with ONE verdict. Integrate technical signals from the chart with fundamental and macro factors — do not treat them as separate signals. The current live price is the closing price of the most recent candle. Return ONLY valid JSON (no markdown fences):
-{"verdict":"BUY|WATCH|AVOID|HOLD","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","target":"$X","stopLoss":"$X","summary":"2-3 sentences combining all factors","macro":"2-3 sentences","fundamental":"2-3 sentences","technical":"2-3 sentences based on the chart data","sentiment":"2-3 sentences","portfolio":"2-3 sentences","support":[{"price":0.0,"label":"Label","strength":"STRONG|MEDIUM|WEAK"}],"resistance":[{"price":0.0,"label":"Label","strength":"STRONG|MEDIUM|WEAK"}],"pattern":{"name":"Pattern name or null","bullish":true,"note":"1 sentence"},"momentum":"1-2 sentences","volume":"1 sentence"}
-Horizon definitions: Short = up to 3 months; Medium = 3 months to 1 year; Long = 1 year or more.
-Match your horizon to the chart range: 1mo = Short, 3mo = Short, 6mo = Medium, 1y = Medium, 5y = Long.
-Provide 1-3 support and 1-3 resistance levels using actual prices from the data.${initialVerdict ? `\n\nIMPORTANT: The initial analysis gave a verdict of "${initialVerdict}". Your detailed analysis should be consistent with this verdict unless the live chart data and indicators provide strong, clear evidence to the contrary. Do not downgrade a BUY to WATCH simply due to normal uncertainty — only change the verdict if the technical data materially contradicts it.` : ""}${fundamentalsBlock}${indicatorsBlock}`,
+        system: indexPrompt,
         messages: [{ role: "user", content: `Symbol: ${sym} (${name})\nCurrent: ${currentPrice} ${currency} | Range: ${range} | Change: ${chgPct}%\nPrice range: ${minP?.toFixed(2)} – ${maxP?.toFixed(2)}\n\nOHLCV (i=candle index, vR=vol vs avg):\n${JSON.stringify(summary)}` }],
       })
     });
@@ -1166,34 +1184,48 @@ app.get("/api/news", async (req, res) => {
       "https://feeds.finance.yahoo.com/rss/2.0/headline?s=BHP.AX,RIO.AX,PLS.AX,FMG.AX&region=AU&lang=en-AU",
     ];
 
+    const feedLabels = ["US TECH", "CRYPTO", "ASX MINING"];
     const results = await Promise.allSettled(
       feeds.map(url => fetch(url, { headers: { "User-Agent": "Mozilla/5.0" }, timeout: 8000 }).then(r => r.text()))
     );
 
-    const allItems = [];
-    for (const r of results) {
+    const buckets = { "US TECH": [], "CRYPTO": [], "ASX MINING": [] };
+    const seen = new Set();
+    for (let fi = 0; fi < results.length; fi++) {
+      const r = results[fi];
       if (r.status !== "fulfilled") continue;
       const xml = r.value;
+      const feedTag = feedLabels[fi];
       const matches = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)];
       for (const m of matches) {
         const c = m[1];
         const title = (c.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/) || c.match(/<title>(.*?)<\/title>/))?.[1]?.trim();
         const link  = (c.match(/<link>(.*?)<\/link>/))?.[1]?.trim() || "";
         const pubDate = (c.match(/<pubDate>(.*?)<\/pubDate>/))?.[1]?.trim() || "";
-        if (title && !allItems.find(i => i.title === title)) {
-          allItems.push({ title, link, pubDate });
+        if (title && !seen.has(title)) {
+          seen.add(title);
+          buckets[feedTag].push({ title, link, pubDate, feedTag });
         }
       }
     }
 
+    // Sort each bucket by date, take top items per category, then merge
+    for (const key of Object.keys(buckets)) buckets[key].sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
+    const perCategory = 6;
+    const allItems = [
+      ...buckets["US TECH"].slice(0, perCategory),
+      ...buckets["CRYPTO"].slice(0, perCategory),
+      ...buckets["ASX MINING"].slice(0, perCategory),
+    ];
     allItems.sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
 
-    const mapped = allItems.slice(0, 16).map(item => {
+    const mapped = allItems.map(item => {
       const age = item.pubDate ? Math.round((now - new Date(item.pubDate).getTime()) / 3600000) : 0;
       const ageStr = age < 1 ? "< 1h ago" : age < 24 ? `${age}h ago` : `${Math.round(age / 24)}d ago`;
 
       const h = item.title.toLowerCase();
-      let tag = "MARKETS";
+      let tag = item.feedTag || "MARKETS";
+      // Refine tag based on headline content if it's more specific
       if (/bitcoin|crypto|eth\b|bnb|solana|ripple|xrp|coin|defi|nft/i.test(h)) tag = "CRYPTO";
       else if (/asx|bhp|rio|fortescue|fmg|lithium|australia|pilbara|mining|ore/i.test(h)) tag = "ASX MINING";
       else if (/nvidia|apple|microsoft|google|amazon|meta|tesla|tech|ai\b|chip|semiconductor|palantir|amd/i.test(h)) tag = "US TECH";
@@ -1236,7 +1268,73 @@ app.get("/api/news", async (req, res) => {
 // ── Dashboard Picks (Claude-powered, cached 4h) ────────────────────────────
 let dashCache = { picks: null, ts: 0 };
 
-app.get("/api/dashboard/picks", async (req, res) => {
+// Track recent picks to avoid repetition (last 3 generations = ~12 hours of picks)
+const recentPickSymbols = [];
+const MAX_RECENT_PICKS = 9; // 3 picks × 3 generations
+
+// Broad ticker pools — rotated each generation to avoid always picking the same stocks
+const TICKER_POOLS = {
+  US: ["NVDA","MSFT","AAPL","AMD","GOOGL","AMZN","META","TSLA","AVGO","CRM","NFLX","PLTR","SNOW","UBER","COIN","SHOP","SQ","PYPL","INTC","MU","ARM","SMCI","MRVL","PANW","CRWD","NOW","ABNB","RIVN","LLY","UNH","V","JPM","GS","BA","CAT","XOM","CVX"],
+  CRYPTO: ["BTC-USD","ETH-USD","SOL-USD","ADA-USD","AVAX-USD","DOT-USD","LINK-USD","MATIC-USD","NEAR-USD","SUI20947-USD","ATOM-USD","FTM-USD","INJ-USD","OP-USD","ARB11841-USD","TIA22861-USD","RENDER-USD","FET-USD"],
+  ASX: ["BHP.AX","RIO.AX","PLS.AX","FMG.AX","CSL.AX","CBA.AX","WDS.AX","NAB.AX","WBC.AX","ANZ.AX","MQG.AX","ALL.AX","XRO.AX","WTC.AX","REA.AX","STO.AX","MIN.AX","LTR.AX","LYC.AX","SYA.AX","DEG.AX","NEM.AX"],
+};
+
+// Fetch trending tickers from Yahoo Finance to dynamically expand the universe
+let trendingCache = { tickers: [], ts: 0 };
+async function fetchTrendingTickers() {
+  const now = Date.now();
+  if (trendingCache.tickers.length && now - trendingCache.ts < 60 * 60 * 1000) return trendingCache.tickers;
+  try {
+    const r = await fetch("https://query1.finance.yahoo.com/v1/finance/trending/US?count=20", {
+      headers: { "User-Agent": "Mozilla/5.0" }, timeout: 8000,
+    });
+    const d = await r.json();
+    const syms = (d?.finance?.result?.[0]?.quotes || []).map(q => q.symbol).filter(Boolean);
+    if (syms.length > 0) {
+      trendingCache = { tickers: syms, ts: now };
+      console.log(`Trending: fetched ${syms.length} tickers: ${syms.join(", ")}`);
+    }
+    return syms;
+  } catch (err) {
+    console.error("Trending fetch error:", err.message);
+    return [];
+  }
+}
+
+// Pick N random items from an array, excluding certain symbols
+function sampleTickers(pool, n, exclude = new Set()) {
+  const filtered = pool.filter(t => !exclude.has(t.replace("-USD", "").replace(".AX", "")));
+  const shuffled = [...filtered].sort(() => Math.random() - 0.5);
+  return shuffled.slice(0, n);
+}
+
+// Build dynamic feed URLs with rotated tickers
+async function buildDynamicFeeds() {
+  const trending = await fetchTrendingTickers();
+  const excludeSet = new Set(recentPickSymbols.map(s => s.replace("-USD", "").replace(".AX", "")));
+
+  // Mix trending tickers into the US pool
+  const trendingStocks = trending.filter(t => !t.includes("-") && !t.includes("."));
+  const expandedUS = [...new Set([...TICKER_POOLS.US, ...trendingStocks])];
+
+  // Sample from each pool, biasing away from recent picks
+  const usTickers = sampleTickers(expandedUS, 6, excludeSet);
+  const cryptoTickers = sampleTickers(TICKER_POOLS.CRYPTO, 4, excludeSet);
+  const asxTickers = sampleTickers(TICKER_POOLS.ASX, 5, excludeSet);
+
+  // Always include S&P 500 index for context
+  const usParam = ["%5EGSPC", ...usTickers].join(",");
+  const cryptoParam = cryptoTickers.join(",");
+  const asxParam = asxTickers.join(",");
+
+  return [
+    `https://feeds.finance.yahoo.com/rss/2.0/headline?s=${usParam}&region=US&lang=en-US`,
+    `https://feeds.finance.yahoo.com/rss/2.0/headline?s=${cryptoParam}&region=US&lang=en-US`,
+    `https://feeds.finance.yahoo.com/rss/2.0/headline?s=${asxParam}&region=AU&lang=en-AU`,
+  ];
+}
+
+app.get("/api/dashboard/picks", requireAuth, async (req, res) => {
   const now = Date.now();
   const force = req.query.force === "1";
   if (!force && dashCache.picks && now - dashCache.ts < 4 * 60 * 60 * 1000) {
@@ -1249,14 +1347,9 @@ app.get("/api/dashboard/picks", async (req, res) => {
 
     // ── Fetch live market context in parallel ──
     const [newsCtx, benchCtx, cryptoCtx] = await Promise.allSettled([
-      // Recent news headlines
+      // Recent news headlines from dynamically rotated tickers
       (async () => {
-        if (newsCache.items.length && now - newsCache.ts < 15 * 60 * 1000) return newsCache.items;
-        const feeds = [
-          "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EGSPC,NVDA,MSFT,AAPL,AMD&region=US&lang=en-US",
-          "https://feeds.finance.yahoo.com/rss/2.0/headline?s=BTC-USD,ETH-USD,SOL-USD&region=US&lang=en-US",
-          "https://feeds.finance.yahoo.com/rss/2.0/headline?s=BHP.AX,RIO.AX,PLS.AX,FMG.AX&region=AU&lang=en-AU",
-        ];
+        const feeds = await buildDynamicFeeds();
         const results = await Promise.allSettled(feeds.map(u => fetch(u, { headers: { "User-Agent": "Mozilla/5.0" } }).then(r => r.text())));
         const items = [];
         for (const r of results) {
@@ -1264,7 +1357,7 @@ app.get("/api/dashboard/picks", async (req, res) => {
           const matches = [...r.value.matchAll(/<item>[\s\S]*?<title><!\[CDATA\[(.*?)\]\]><\/title>[\s\S]*?<\/item>/g)];
           matches.forEach(m => items.push(m[1]));
         }
-        return items.slice(0, 12);
+        return items.slice(0, 18);
       })(),
       // Benchmark performance
       (async () => {
@@ -1279,11 +1372,11 @@ app.get("/api/dashboard/picks", async (req, res) => {
         const [sp, ax] = await Promise.all([fetchIdx("^GSPC"), fetchIdx("^AXJO")]);
         return { sp500: sp, asx200: ax };
       })(),
-      // Top crypto prices
+      // Top crypto prices (broader set)
       (async () => {
-        const r = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=usd&include_24hr_change=true");
+        const r = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana,cardano,avalanche-2,polkadot,chainlink,near,sui,render-token&vs_currencies=usd&include_24hr_change=true");
         const d = await r.json();
-        return Object.entries(d).map(([k, v]) => `${k}: $${v.usd.toLocaleString()} (${v.usd_24h_change >= 0 ? "+" : ""}${v.usd_24h_change.toFixed(1)}% 24h)`).join(", ");
+        return Object.entries(d).map(([k, v]) => `${k}: $${v.usd?.toLocaleString()} (${v.usd_24h_change >= 0 ? "+" : ""}${v.usd_24h_change?.toFixed(1)}% 24h)`).join(", ");
       })(),
     ]);
 
@@ -1299,14 +1392,18 @@ app.get("/api/dashboard/picks", async (req, res) => {
       ? `\n\nCRYPTO PRICES: ${cryptoCtx.value}`
       : "";
 
+    const recentPicksWarning = recentPickSymbols.length > 0
+      ? `\n\nRECENT PICKS TO AVOID (already recommended recently — pick something different):\n${recentPickSymbols.join(", ")}`
+      : "";
+
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
         model: "claude-sonnet-4-20250514",
-        max_tokens: 3000, temperature: 0.3,
+        max_tokens: 3000, temperature: 0.5,
         system: `You are a senior investment analyst generating today's top picks. Today is ${today}.
-${benchmarks}${cryptoPrices}${newsHeadlines}
+${benchmarks}${cryptoPrices}${newsHeadlines}${recentPicksWarning}
 
 TASK: Generate 3 high-conviction investment picks grounded in the LIVE DATA above. At least 2 must be BUY. Aim for variety across asset classes (e.g. US large-cap, ASX stock, crypto).
 
@@ -1314,8 +1411,10 @@ CRITICAL RULES:
 - Every pick MUST cite a specific catalyst from the news, market data, or a verifiable recent event. No generic "looks undervalued" picks.
 - Reference actual prices and percentage moves from the data above. Your analysis must be anchored in TODAY's market conditions.
 - Be aggressive — this user wants actionable BUY opportunities, not cautious hedging.
+- DO NOT pick any ticker listed under "RECENT PICKS TO AVOID" above. Choose different stocks/crypto each time. Explore mid-caps, emerging names, and less obvious opportunities — not just the biggest names.
 - ASX tickers must end in .AX. Use standard crypto symbols (BTC, ETH, SOL etc).
 - For priceStatic use your best estimate of the current price based on the data above.
+- CRITICAL: The "upside" percentage is what matters most — target will be recalculated from it. Make upside realistic: Short-term ~5-15%, Medium ~10-30%, Long ~15-50%. The upside must be consistent with your verdict.
 
 Horizon definitions: Short = up to 3 months; Medium = 3 months to 1 year; Long = 1 year or more.
 
@@ -1341,8 +1440,26 @@ Respond ONLY with a valid JSON array, no markdown fences. Each pick must use thi
         else { pick.priceStatic = null; }
       } catch { pick.priceStatic = null; }
     }));
+    // Recalculate targets from upside% + live price (Claude's absolute targets are based on stale training data)
+    for (const pick of parsed) {
+      if (pick.priceStatic && pick.upside) {
+        const pct = parseFloat(String(pick.upside).replace(/[^-\d.]/g, ""));
+        if (!isNaN(pct) && pct !== 0) {
+          const newTarget = pick.priceStatic * (1 + pct / 100);
+          const prefix = (pick.priceCurrency === "AUD") ? "A$" : "$";
+          pick.target = `${prefix}${newTarget.toFixed(2)}`;
+        }
+      }
+    }
+    // Track picks to avoid repetition in future generations
+    for (const pick of parsed) {
+      if (pick.sym) {
+        recentPickSymbols.push(pick.sym);
+        if (recentPickSymbols.length > MAX_RECENT_PICKS) recentPickSymbols.shift();
+      }
+    }
     dashCache = { picks: parsed, ts: now };
-    console.log(`Dashboard: generated ${parsed.length} picks`);
+    console.log(`Dashboard: generated ${parsed.length} picks (recent history: ${recentPickSymbols.join(", ")})`);
     res.json(parsed);
   } catch (err) {
     console.error("Dashboard picks error:", err.message);
@@ -1352,7 +1469,7 @@ Respond ONLY with a valid JSON array, no markdown fences. Each pick must use thi
 
 
 // ── Dashboard picks (streaming) ─────────────────────────────────────────────
-app.get("/api/dashboard/picks/stream", async (req, res) => {
+app.get("/api/dashboard/picks/stream", requireAuth, async (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
@@ -1370,13 +1487,9 @@ app.get("/api/dashboard/picks/stream", async (req, res) => {
     const today = new Date().toLocaleDateString("en-AU", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
 
     const [newsCtx, benchCtx, cryptoCtx] = await Promise.allSettled([
+      // Recent news headlines from dynamically rotated tickers
       (async () => {
-        if (newsCache.items.length && now - newsCache.ts < 15 * 60 * 1000) return newsCache.items;
-        const feeds = [
-          "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EGSPC,NVDA,MSFT,AAPL,AMD&region=US&lang=en-US",
-          "https://feeds.finance.yahoo.com/rss/2.0/headline?s=BTC-USD,ETH-USD,SOL-USD&region=US&lang=en-US",
-          "https://feeds.finance.yahoo.com/rss/2.0/headline?s=BHP.AX,RIO.AX,PLS.AX,FMG.AX&region=AU&lang=en-AU",
-        ];
+        const feeds = await buildDynamicFeeds();
         const results = await Promise.allSettled(feeds.map(u => fetch(u, { headers: { "User-Agent": "Mozilla/5.0" } }).then(r => r.text())));
         const items = [];
         for (const r of results) {
@@ -1384,7 +1497,7 @@ app.get("/api/dashboard/picks/stream", async (req, res) => {
           const matches = [...r.value.matchAll(/<item>[\s\S]*?<title><!\[CDATA\[(.*?)\]\]><\/title>[\s\S]*?<\/item>/g)];
           matches.forEach(m => items.push(m[1]));
         }
-        return items.slice(0, 12);
+        return items.slice(0, 18);
       })(),
       (async () => {
         const fetchIdx = async (sym) => {
@@ -1398,10 +1511,11 @@ app.get("/api/dashboard/picks/stream", async (req, res) => {
         const [sp, ax] = await Promise.all([fetchIdx("^GSPC"), fetchIdx("^AXJO")]);
         return { sp500: sp, asx200: ax };
       })(),
+      // Top crypto prices (broader set)
       (async () => {
-        const r = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=usd&include_24hr_change=true");
+        const r = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana,cardano,avalanche-2,polkadot,chainlink,near,sui,render-token&vs_currencies=usd&include_24hr_change=true");
         const d = await r.json();
-        return Object.entries(d).map(([k, v]) => `${k}: $${v.usd.toLocaleString()} (${v.usd_24h_change >= 0 ? "+" : ""}${v.usd_24h_change.toFixed(1)}% 24h)`).join(", ");
+        return Object.entries(d).map(([k, v]) => `${k}: $${v.usd?.toLocaleString()} (${v.usd_24h_change >= 0 ? "+" : ""}${v.usd_24h_change?.toFixed(1)}% 24h)`).join(", ");
       })(),
     ]);
 
@@ -1415,10 +1529,14 @@ app.get("/api/dashboard/picks/stream", async (req, res) => {
       : "";
     const cryptoPrices = cryptoCtx.status === "fulfilled" ? `\n\nCRYPTO PRICES: ${cryptoCtx.value}` : "";
 
+    const recentPicksWarning = recentPickSymbols.length > 0
+      ? `\n\nRECENT PICKS TO AVOID (already recommended recently — pick something different):\n${recentPickSymbols.join(", ")}`
+      : "";
+
     send({ status: "Analysing pick 1 of 3..." });
 
     const sysPrompt = `You are a senior investment analyst generating today's top picks. Today is ${today}.
-${benchmarks}${cryptoPrices}${newsHeadlines}
+${benchmarks}${cryptoPrices}${newsHeadlines}${recentPicksWarning}
 
 TASK: Generate 3 high-conviction investment picks grounded in the LIVE DATA above. At least 2 must be BUY. Aim for variety across asset classes (e.g. US large-cap, ASX stock, crypto).
 
@@ -1426,8 +1544,10 @@ CRITICAL RULES:
 - Every pick MUST cite a specific catalyst from the news, market data, or a verifiable recent event. No generic "looks undervalued" picks.
 - Reference actual prices and percentage moves from the data above. Your analysis must be anchored in TODAY's market conditions.
 - Be aggressive — this user wants actionable BUY opportunities, not cautious hedging.
+- DO NOT pick any ticker listed under "RECENT PICKS TO AVOID" above. Choose different stocks/crypto each time. Explore mid-caps, emerging names, and less obvious opportunities — not just the biggest names.
 - ASX tickers must end in .AX. Use standard crypto symbols (BTC, ETH, SOL etc).
 - For priceStatic use your best estimate of the current price based on the data above.
+- CRITICAL: The "upside" percentage is what matters most — target will be recalculated from it. Make upside realistic: Short-term ~5-15%, Medium ~10-30%, Long ~15-50%. The upside must be consistent with your verdict.
 
 Horizon definitions: Short = up to 3 months; Medium = 3 months to 1 year; Long = 1 year or more.
 
@@ -1438,7 +1558,7 @@ Respond ONLY with a valid JSON array, no markdown fences. Each pick must use thi
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514", max_tokens: 3000, stream: true, temperature: 0.3,
+        model: "claude-sonnet-4-20250514", max_tokens: 3000, stream: true, temperature: 0.5,
         system: sysPrompt,
         messages: [{ role: "user", content: "Generate today's 3 top investment picks. Ground every pick in the live market data provided. Be specific and aggressive." }],
       }),
@@ -1494,9 +1614,27 @@ Respond ONLY with a valid JSON array, no markdown fences. Each pick must use thi
         else { pick.priceStatic = null; }
       } catch { pick.priceStatic = null; }
     }));
+    // Recalculate targets from upside% + live price (Claude's absolute targets are based on stale training data)
+    for (const pick of parsed) {
+      if (pick.priceStatic && pick.upside) {
+        const pct = parseFloat(String(pick.upside).replace(/[^-\d.]/g, ""));
+        if (!isNaN(pct) && pct !== 0) {
+          const newTarget = pick.priceStatic * (1 + pct / 100);
+          const prefix = (pick.priceCurrency === "AUD") ? "A$" : "$";
+          pick.target = `${prefix}${newTarget.toFixed(2)}`;
+        }
+      }
+    }
 
+    // Track picks to avoid repetition in future generations
+    for (const pick of parsed) {
+      if (pick.sym) {
+        recentPickSymbols.push(pick.sym);
+        if (recentPickSymbols.length > MAX_RECENT_PICKS) recentPickSymbols.shift();
+      }
+    }
     dashCache = { picks: parsed, ts: now };
-    console.log(`Dashboard: generated ${parsed.length} picks (streamed)`);
+    console.log(`Dashboard: generated ${parsed.length} picks (streamed, recent history: ${recentPickSymbols.join(", ")})`);
     send({ status: "done", picks: parsed });
     res.write("data: [DONE]\n\n");
     res.end();
@@ -1510,7 +1648,7 @@ Respond ONLY with a valid JSON array, no markdown fences. Each pick must use thi
 
 
 // ── Glossary term extraction ────────────────────────────────────────────────
-app.post("/api/glossary/extract", async (req, res) => {
+app.post("/api/glossary/extract", requireAuth, async (req, res) => {
   const { text } = req.body || {};
   if (!text || typeof text !== "string") return res.json([]);
   try {
@@ -1539,7 +1677,7 @@ app.post("/api/glossary/extract", async (req, res) => {
 
 
 // ── Trade Journal Pattern Analysis ────────────────────────────────────────
-app.post("/api/journal/analyse", async (req, res) => {
+app.post("/api/journal/analyse", requireAuth, async (req, res) => {
   const { entries } = req.body;
   if (!entries?.length) return res.status(400).json({ error: "entries required" });
   const today = new Date().toLocaleDateString("en-AU", { year:"numeric", month:"long", day:"numeric" });
@@ -1571,7 +1709,7 @@ app.post("/api/journal/analyse", async (req, res) => {
 // ── Macro Event Calendar ───────────────────────────────────────────────────
 let macroCache = { events: null, ts: 0 };
 
-app.post("/api/macro", async (req, res) => {
+app.post("/api/macro", requireAuth, async (req, res) => {
   const { holdingSyms } = req.body || {};
   const now = Date.now();
   // Cache macro events for 4h
@@ -1630,7 +1768,7 @@ Return 8–14 events. Sort by date ascending. Only include events you are confid
 });
 
 // ── Natural Language Screener ──────────────────────────────────────────────
-app.post("/api/screener", async (req, res) => {
+app.post("/api/screener", requireAuth, async (req, res) => {
   const { query } = req.body;
   if (!query) return res.status(400).json({ error: "query required" });
   const today = new Date().toLocaleDateString("en-AU", { year:"numeric", month:"long", day:"numeric" });
@@ -1679,7 +1817,7 @@ Horizon definitions: Short = up to 3 months; Medium = 3 months to 1 year; Long =
 // ── Earnings Calendar ──────────────────────────────────────────────────────
 let earningsCache = {};  // keyed by sym, { data, ts }
 
-app.post("/api/earnings", async (req, res) => {
+app.post("/api/earnings", requireAuth, async (req, res) => {
   const { symbols } = req.body;
   if (!symbols?.length) return res.json({});
   if (!FMP_API_KEY) return res.json({});
@@ -1707,7 +1845,7 @@ app.post("/api/earnings", async (req, res) => {
 });
 
 // ── CMC Holdings (server-side CSV parse) ─────────────────────────────────
-app.get("/api/cmc/holdings", (req, res) => {
+app.get("/api/cmc/holdings", requireAuth, (req, res) => {
   try {
     const fs = require("fs"), path = require("path");
     const csvPath = path.join(__dirname, "cmc_portfolio.csv");
@@ -1717,8 +1855,12 @@ app.get("/api/cmc/holdings", (req, res) => {
     if (lines.length < 2) return res.json([]);
     const headers = lines[0].replace(/^\uFEFF/, "").split(",").map(h => h.replace(/"/g, "").trim());
     const idx = n => headers.indexOf(n);
+    const idxi = (...names) => { for (const n of names) { const i = headers.findIndex(h => h.toLowerCase() === n.toLowerCase()); if (i !== -1) return i; } return -1; };
     const iCode = idx("Security Code"), iQty = idx("Quantity"), iAvg = idx("Average Cost $");
     const iSector = idx("Sector"), iName = idx("Company Name");
+    const iDivC  = idxi("Current Dividend c","Dividend (c)","Dividend c","Current Div c","Div (c)");
+    const iDivY  = idxi("Dividend yield %","Dividend Yield %","Dividend Yield","Yield %","Div Yield %");
+    const iFrank = idxi("Franking %","Franking","Franking Pct","Frank %");
     if (iCode === -1 || iQty === -1 || iAvg === -1) return res.json([]);
     const holdings = [];
     for (let i = 1; i < lines.length; i++) {
@@ -1731,14 +1873,17 @@ app.get("/api/cmc/holdings", (req, res) => {
       const isUS = /:\s*US$/i.test(rawCode);
       let sym = rawCode.replace(/:US$/i, "").trim();
       if (!isUS && !sym.endsWith(".AX")) sym += ".AX";
-      holdings.push({ sym, name: cols[iName] || sym, qty, avg: avgAUD, avgCurrency: "AUD", priceCurrency: isUS ? "USD" : "AUD", sector: cols[iSector] || "Unknown", horizon: "Medium", priceType: "stock", source: "cmc", rawCode });
+      const divCents    = iDivC  !== -1 ? parseFloat(cols[iDivC])  || 0 : 0;
+      const divYieldPct = iDivY  !== -1 ? parseFloat(cols[iDivY])  || 0 : 0;
+      const frankingPct = iFrank !== -1 ? parseFloat(cols[iFrank]) || 0 : 0;
+      holdings.push({ sym, name: cols[iName] || sym, qty, avg: avgAUD, avgCurrency: "AUD", priceCurrency: isUS ? "USD" : "AUD", sector: cols[iSector] || "Unknown", horizon: "Medium", priceType: "stock", source: "cmc", rawCode, divCents, divYieldPct, frankingPct });
     }
     res.json(holdings);
   } catch (err) { console.error("CMC parse error:", err.message); res.json([]); }
 });
 
 // ── Combined Portfolio (all sources + live prices + P&L) ──────────────────
-app.post("/api/portfolio/combined", async (req, res) => {
+app.post("/api/portfolio/combined", requireAuth, async (req, res) => {
   const { cmcHoldings, ledgerAddresses } = req.body || {};
   const audUsd = await getLiveAUDUSD();
 
@@ -1939,7 +2084,7 @@ app.post("/api/portfolio/combined", async (req, res) => {
 });
 
 // ── Portfolio Performance History ──────────────────────────────────────────
-app.post("/api/portfolio/history", async (req, res) => {
+app.post("/api/portfolio/history", requireAuth, async (req, res) => {
   const { holdings, range } = req.body;
   if (!holdings?.length) return res.json({ series: [] });
 
@@ -2005,7 +2150,7 @@ app.post("/api/portfolio/history", async (req, res) => {
 });
 
 // ── Portfolio Risk Metrics ─────────────────────────────────────────────────
-app.post("/api/portfolio/risk", async (req, res) => {
+app.post("/api/portfolio/risk", requireAuth, async (req, res) => {
   const { holdings } = req.body;
   if (!holdings?.length) return res.json(null);
 
@@ -2106,6 +2251,52 @@ app.post("/api/portfolio/risk", async (req, res) => {
   });
 });
 
+// ── Indices summary (^AORD, ^IXIC, ^DJI) ──────────────────────────────────
+let indicesCache = { data: null, ts: 0 };
+
+app.get("/api/indices/summary", async (req, res) => {
+  const now = Date.now();
+  if (indicesCache.data && now - indicesCache.ts < 5 * 60 * 1000) {
+    return res.json(indicesCache.data);
+  }
+  const fetchIdx = async (sym, name, region) => {
+    try {
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=1mo&includePrePost=false`;
+      const r = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
+      const d = await r.json();
+      const result = d?.chart?.result?.[0];
+      if (!result) return null;
+      const meta = result.meta;
+      const timestamps = result.timestamp || [];
+      const rawCloses = result.indicators?.quote?.[0]?.close || [];
+      // Build array of {date, close} for trading days only
+      const days = timestamps.map((ts, i) => ({ ts: ts * 1000, close: rawCloses[i] })).filter(d => d.close != null);
+      if (days.length < 2) return null;
+      const price = meta.regularMarketPrice || days[days.length - 1].close;
+      // Most recent trading day change only
+      const day1Close = days[days.length - 1].close;
+      const day1Prev  = days[days.length - 2].close;
+      const change1 = day1Prev ? ((day1Close - day1Prev) / day1Prev) * 100 : null;
+      const day1Date = new Date(days[days.length - 1].ts).toLocaleDateString("en-AU", { day:"numeric", month:"short" });
+      // % change series for overlay chart (normalised from first day)
+      const baseClose = days[0].close;
+      const series = days.map(d => ({
+        t: d.ts,
+        pct: ((d.close - baseClose) / baseClose) * 100,
+      }));
+      return { sym, name, region, price, change1, day1Date, series };
+    } catch { return null; }
+  };
+  const data = await Promise.all([
+    fetchIdx("^AORD", "ASX All Ordinaries", "AU"),
+    fetchIdx("^IXIC", "NASDAQ Composite", "US"),
+    fetchIdx("^DJI",  "Dow Jones Industrial", "US"),
+  ]);
+  const result = data.filter(Boolean);
+  if (result.length) indicesCache = { data: result, ts: now };
+  res.json(result);
+});
+
 // ── Benchmark comparison (^GSPC, ^AXJO) ───────────────────────────────────
 let benchmarkCache = { data: null, ts: 0 };
 
@@ -2148,7 +2339,7 @@ app.get("/api/benchmarks", async (req, res) => {
 // ── Portfolio Dividends ────────────────────────────────────────────────────
 let dividendCache = {};  // keyed by sym, { data, ts }
 
-app.post("/api/portfolio/dividends", async (req, res) => {
+app.post("/api/portfolio/dividends", requireAuth, async (req, res) => {
   if (!FMP_API_KEY) return res.json({});
   const { symbols } = req.body;
   if (!symbols?.length) return res.json({});
@@ -2177,15 +2368,16 @@ app.post("/api/portfolio/dividends", async (req, res) => {
             const lastDiv = divData?.historical?.[0] || null;
             dividendCache[sym] = {
               data: {
-                yield:             km?.dividendYield    || 0,
-                annualDivPerShare: km?.dividendPerShare || 0,
-                exDivDate:         lastDiv?.date        || null,
-                paymentDate:       lastDiv?.paymentDate || null,
+                yield:              km?.dividendYield    || 0,
+                annualDivPerShare:  km?.dividendPerShare || 0,
+                exDivDate:          lastDiv?.date        || null,
+                paymentDate:        lastDiv?.paymentDate || null,
+                mostRecentDividend: lastDiv?.dividend    || lastDiv?.adjDividend || 0,
               },
               ts: now,
             };
           } catch (e) {
-            dividendCache[sym] = { data: { yield: 0, annualDivPerShare: 0, exDivDate: null, paymentDate: null }, ts: now };
+            dividendCache[sym] = { data: { yield: 0, annualDivPerShare: 0, exDivDate: null, paymentDate: null, mostRecentDividend: 0 }, ts: now };
           }
         })
       );
@@ -2198,7 +2390,7 @@ app.post("/api/portfolio/dividends", async (req, res) => {
 });
 
 // ── Portfolio Coach ────────────────────────────────────────────────────────
-app.post("/api/portfolio/coach", async (req, res) => {
+app.post("/api/portfolio/coach", requireAuth, async (req, res) => {
   const { snapshot } = req.body;
   if (!snapshot || !snapshot.holdings?.length)
     return res.status(400).json({ error: "Portfolio snapshot required" });
@@ -2238,7 +2430,7 @@ Provide 2-4 specific, concrete actions.`,
 });
 
 // ── Ledger (public address lookup) ────────────────────────────────────────
-app.post("/api/ledger/balances", async (req, res) => {
+app.post("/api/ledger/balances", requireAuth, async (req, res) => {
   try {
     const { addresses } = req.body;
     if (!Array.isArray(addresses) || !addresses.length) return res.json({ holdings: [], lastSync: new Date().toISOString() });
@@ -2287,6 +2479,66 @@ app.post("/api/ledger/balances", async (req, res) => {
     res.status(500).json({ error: "Failed to fetch Ledger balances" });
   }
 });
+
+// ── Dividend dates (ex-div + pay date) from Yahoo Finance ────────────────
+const divDatesCache = {};
+app.post("/api/dividends/dates", requireAuth, async (req, res) => {
+  const { symbols } = req.body;
+  if (!symbols?.length) return res.json({});
+  const now = Date.now();
+  const TTL = 24 * 60 * 60 * 1000;
+  const toISO = ts => ts ? new Date(ts * 1000).toISOString().slice(0, 10) : null;
+  const toFetch = symbols.filter(s => !divDatesCache[s] || now - divDatesCache[s].ts > TTL);
+  await Promise.allSettled(toFetch.map(async sym => {
+    try {
+      // summaryDetail: ex-div date, pay date, yield, annual DPS
+      const sdUrl = `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(sym)}?modules=summaryDetail`;
+      const sdRes = await fetch(sdUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
+      const sdJson = await sdRes.json();
+      const sd = sdJson?.quoteSummary?.result?.[0]?.summaryDetail || {};
+      let exDivDate = sd.exDividendDate?.raw ? toISO(sd.exDividendDate.raw) : null;
+      let payDate   = sd.dividendDate?.raw   ? toISO(sd.dividendDate.raw)   : null;
+      const yieldVal = sd.dividendYield?.raw || sd.trailingAnnualDividendYield?.raw || null;
+      const annualDPS = sd.dividendRate?.raw || sd.trailingAnnualDividendRate?.raw || null;
+
+      // Always fetch chart events: most recent div date + compute trailing yield
+      const chartUrl = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?events=div&range=2y&interval=1mo`;
+      const chartRes = await fetch(chartUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
+      const chartJson = await chartRes.json();
+      const chartResult = chartJson?.chart?.result?.[0] || {};
+      const divEvents = chartResult?.events?.dividends || {};
+      const currentPrice = chartResult?.meta?.regularMarketPrice || null;
+      const keys = Object.keys(divEvents).map(Number).sort((a, b) => b - a);
+      if (!exDivDate && keys.length) {
+        exDivDate = toISO(keys[0]);
+        payDate   = divEvents[keys[0]]?.date ? toISO(divEvents[keys[0]].date) : null;
+      }
+      // Compute trailing 12-month yield from chart events if YF summary didn't return one
+      if (!yieldVal && keys.length && currentPrice) {
+        const cutoff = Date.now() / 1000 - 365 * 24 * 60 * 60;
+        const trailing = keys.filter(k => k >= cutoff).reduce((s, k) => s + (divEvents[k].amount || 0), 0);
+        if (trailing > 0) {
+          const computedYield = trailing / currentPrice;
+          const computedDPS   = trailing;
+          divDatesCache[sym] = { data: { exDivDate, payDate, yield: computedYield, annualDPS: computedDPS }, ts: now };
+        } else {
+          divDatesCache[sym] = { data: { exDivDate, payDate, yield: yieldVal, annualDPS }, ts: now };
+        }
+      } else {
+        divDatesCache[sym] = { data: { exDivDate, payDate, yield: yieldVal, annualDPS }, ts: now };
+      }
+    } catch { divDatesCache[sym] = { data: { exDivDate: null, payDate: null }, ts: now }; }
+  }));
+  const out = {};
+  symbols.forEach(s => { if (divDatesCache[s]) out[s] = divDatesCache[s].data; });
+  res.json(out);
+});
+
+// ── Auth config (public — exposes only safe client-side IDs) ──────────────
+app.get("/api/auth/config", (_, res) => res.json({
+  googleClientId: process.env.GOOGLE_CLIENT_ID || null,
+  appleClientId: process.env.APPLE_CLIENT_ID || null,
+}));
 
 // ── Health ─────────────────────────────────────────────────────────────────
 app.get("/health", (_, res) => res.json({

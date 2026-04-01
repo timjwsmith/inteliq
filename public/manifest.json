@@ -18,8 +18,8 @@
   ],
   "start_url": "/",
   "display": "standalone",
-  "theme_color": "#120f1e",
-  "background_color": "#120f1e",
+  "theme_color": "#1a1630",
+  "background_color": "#1a1630",
   "orientation": "portrait-primary",
   "scope": "/",
   "categories": ["finance", "business"]

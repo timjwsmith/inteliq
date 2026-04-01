@@ -1,4 +1,22 @@
 services:
+  # Caddy reverse proxy — automatic HTTPS via Let's Encrypt
+  caddy:
+    build:
+      context: .
+      dockerfile: Dockerfile.caddy
+    container_name: inteliq-caddy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_started
+    restart: unless-stopped
+
   # Express API proxy (keeps Anthropic API key server-side)
   server:
     build:
@@ -6,8 +24,8 @@ services:
       dockerfile: Dockerfile.server
     container_name: inteliq-server
     env_file: .env
-    ports:
-      - "4001:3001"
+    volumes:
+      - inteliq-data:/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3001/health"]
@@ -21,11 +39,12 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: inteliq-app
-    ports:
-      - "4000:80"
     depends_on:
       server:
         condition: service_healthy
     restart: unless-stopped
 
-volumes: {}
+volumes:
+  inteliq-data:
+  caddy_data:
+  caddy_config:
