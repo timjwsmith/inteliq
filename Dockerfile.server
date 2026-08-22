@@ -5,7 +5,13 @@ RUN apk add --no-cache python3 make g++
 
 WORKDIR /app
 COPY server-package.json ./package.json
-RUN npm install
+RUN npm install \
+    # Strip build toolchain + npm itself once install completes — the
+    # app runs `node server.js` at runtime and needs none of them.
+    # Removes tar / sigstore / brace-expansion / ip-address /
+    # picomatch CVEs bundled with npm, plus shrinks the image.
+    && apk del --no-cache python3 make g++ \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx /root/.npm
 
 COPY server.js db.js auth.js user-data.js ./
 COPY .env* ./
