@@ -87,7 +87,7 @@ app.post("/api/explorer/search", requireAuth, async (req, res) => {
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
+        model: "claude-sonnet-4-6",
         max_tokens: 1000,
         temperature: 0.3,
         system: `You are a senior investment analyst. Today is ${today}. Your training knowledge has a cutoff of approximately mid-2025 — do NOT present specific metrics from your training data as if they are current facts. For crypto assets (BTC, ETH, SOL etc) analyse the native coin/token directly — do NOT substitute an ETF or trust product. Respond ONLY with valid JSON, no markdown:\n{"sym":"TICKER","name":"Full name","sector":"sector","verdict":"BUY|WATCH|AVOID|HOLD","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","priceStatic":123.45,"target":"$X","upside":"+X%","up":true,"priceType":"stock or crypto","priceCurrency":"USD or AUD","summary":"2-3 sentences","macro":"2-3 sentences","fundamental":"2-3 sentences","technical":"2-3 sentences","sentiment":"2-3 sentences","insider":"2-3 sentences","portfolio":"2-3 sentences"}`,
@@ -1119,7 +1119,7 @@ Provide 1-3 support and 1-3 resistance levels using actual prices from the data.
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
+        model: "claude-sonnet-4-6",
         max_tokens: 1500, temperature: 0.3,
         system: indexPrompt,
         messages: [{ role: "user", content: `Symbol: ${sym} (${name})\nCurrent: ${currentPrice} ${currency} | Range: ${range} | Change: ${chgPct}%\nPrice range: ${minP?.toFixed(2)} – ${maxP?.toFixed(2)}\n\nOHLCV (i=candle index, vR=vol vs avg):\n${JSON.stringify(summary)}` }],
@@ -1400,7 +1400,7 @@ app.get("/api/dashboard/picks", requireAuth, async (req, res) => {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
+        model: "claude-sonnet-4-6",
         max_tokens: 3000, temperature: 0.5,
         system: `You are a senior investment analyst generating today's top picks. Today is ${today}.
 ${benchmarks}${cryptoPrices}${newsHeadlines}${recentPicksWarning}
@@ -1558,7 +1558,7 @@ Respond ONLY with a valid JSON array, no markdown fences. Each pick must use thi
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514", max_tokens: 3000, stream: true, temperature: 0.5,
+        model: "claude-sonnet-4-6", max_tokens: 3000, stream: true, temperature: 0.5,
         system: sysPrompt,
         messages: [{ role: "user", content: "Generate today's 3 top investment picks. Ground every pick in the live market data provided. Be specific and aggressive." }],
       }),
@@ -1777,7 +1777,7 @@ app.post("/api/screener", requireAuth, async (req, res) => {
       method: "POST",
       headers: { "Content-Type":"application/json", "x-api-key":ANTHROPIC_API_KEY, "anthropic-version":"2023-06-01" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514", max_tokens: 2000, temperature: 0.3,
+        model: "claude-sonnet-4-6", max_tokens: 2000, temperature: 0.3,
         system: `You are a senior investment analyst running a stock screener. Today is ${today}. The user has described what they are looking for in plain English. Return 5–7 stocks that best match their criteria as of today. Be specific and current — pick stocks that genuinely fit right now, not generic examples. ASX tickers must end in .AX. Return ONLY a valid JSON array with no markdown, no preamble, no explanation — just the raw JSON array:
 [{"sym":"TICKER","name":"Full Company Name","sector":"Sector","verdict":"BUY|WATCH|AVOID|HOLD","conviction":"HIGH|MEDIUM|LOW","horizon":"Short|Medium|Long","priceStatic":0.00,"target":"$X","upside":"+X%","up":true,"priceType":"stock or crypto","priceCurrency":"USD or AUD","avgCurrency":"USD or AUD","matchReason":"2-3 sentences on exactly why this matches the screen criteria","summary":"2-3 sentences on the investment thesis"}]
 IMPORTANT: target price MUST be in the stock's native trading currency (AUD for ASX .AX stocks, USD for US stocks). The target must be realistic relative to the current price and consistent with your verdict (BUY targets must be ABOVE the current price).
@@ -2411,7 +2411,7 @@ app.post("/api/portfolio/coach", requireAuth, async (req, res) => {
       method: "POST",
       headers: { "Content-Type":"application/json", "x-api-key":ANTHROPIC_API_KEY, "anthropic-version":"2023-06-01" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514", max_tokens: 2000, temperature: 0.3,
+        model: "claude-sonnet-4-6", max_tokens: 2000, temperature: 0.3,
         system: `You are a senior portfolio strategist. Today is ${today}. Analyse this portfolio and provide honest, actionable coaching. Be specific — name actual positions. Return ONLY valid JSON (no markdown fences):
 {"grade":"A|B|C|D|F","gradeNote":"One sentence justifying the grade","summary":"2-3 sentences overall portfolio assessment","concentration":"2-3 sentences naming specific over-weight positions","diversification":"2-3 sentences on diversification quality","riskProfile":"AGGRESSIVE|BALANCED|CONSERVATIVE","riskNote":"1-2 sentences","strengths":["up to 3 short strength strings"],"weaknesses":["up to 3 short weakness strings"],"actions":[{"priority":"HIGH|MEDIUM|LOW","action":"Specific action to take","reason":"Why this matters"}],"sectorComment":"1-2 sentences on sector allocation","cryptoComment":"1-2 sentences on crypto allocation — omit key if no crypto","outlook":"1-2 sentences on portfolio outlook given current market conditions"}
 Provide 2-4 specific, concrete actions.`,
