@@ -162,6 +162,13 @@ const css = `
     .alloc-grid { grid-template-columns: 1fr !important; }
     .section-label { font-size: 9px !important; }
     .coach-stats-grid { grid-template-columns: repeat(2, 1fr) !important; }
+    .alloc-panel-grid { grid-template-columns: 1fr !important; gap: 16px !important; }
+    .alloc-panel-grid > div:first-child canvas { width: 140px !important; height: 140px !important; }
+    .risk-stats-grid { grid-template-columns: repeat(2, 1fr) !important; }
+    .risk-stats-grid > div { padding: 12px !important; min-width: 0 !important; }
+    .risk-stats-grid > div .risk-value { font-size: 18px !important; }
+    .bench-row { grid-template-columns: 1fr auto !important; gap: 8px !important; }
+    .bench-row .bench-bar { grid-column: 1 / -1 !important; }
   }
   @media (max-width: 480px) {
     .app-main { padding: 12px 8px !important;
@@ -730,7 +737,7 @@ function BenchmarkStrip({ holdings, livePrices, audUsd, authFetch }) {
 
       <div style={{ display:"grid", gap:10 }}>
         {rows.map(row => (
-          <div key={row.label} style={{ display:"grid", gridTemplateColumns:"140px 76px 1fr", gap:12, alignItems:"center" }}>
+          <div key={row.label} className="bench-row" style={{ display:"grid", gridTemplateColumns:"140px 76px 1fr", gap:12, alignItems:"center" }}>
             <div>
               <div style={{ fontSize:12, fontWeight:600, color:"var(--text2)" }}>{row.label}</div>
               <div style={{ fontSize:10, color:"var(--muted)", fontFamily:"var(--ff-mono)" }}>{row.sub}</div>
@@ -739,7 +746,7 @@ function BenchmarkStrip({ holdings, livePrices, audUsd, authFetch }) {
               color: row.pct == null ? "var(--muted)" : row.pct >= 0 ? "var(--green)" : "var(--red)" }}>
               {row.pct != null ? (row.pct >= 0 ? "+" : "") + row.pct.toFixed(2) + "%" : "—"}
             </div>
-            <div style={{ position:"relative", height:6, background:"var(--surface)", borderRadius:4, overflow:"hidden" }}>
+            <div className="bench-bar" style={{ position:"relative", height:6, background:"var(--surface)", borderRadius:4, overflow:"hidden" }}>
               {row.pct != null && (
                 <div style={{
                   position:"absolute", height:"100%", borderRadius:4,
@@ -841,16 +848,16 @@ function RiskPanel({ holdings, audUsd, authFetch }) {
 
       {expanded && (
         loading ? (
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:12 }}>
+          <div className="risk-stats-grid" style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:12 }}>
             {[1,2,3,4].map(i => <div key={i} className="shimmer-el" style={{ height:76 }}/>)}
           </div>
         ) : stats.length > 0 ? (
           <>
-            <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:12 }}>
+            <div className="risk-stats-grid" style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:12 }}>
               {stats.map(s => (
                 <div key={s.label} style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:10, padding:"14px 16px" }}>
                   <button onClick={() => openGlossary(s.glossaryTerm)} style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.1em", marginBottom:6, background:"none", border:"none", padding:0, cursor:"pointer", textDecoration:"underline dotted", textUnderlineOffset:3 }}>{s.label}</button>
-                  <div style={{ fontSize:22, fontWeight:800, fontFamily:"var(--ff-mono)", color:s.color, lineHeight:1 }}>{s.value}</div>
+                  <div className="risk-value" style={{ fontSize:22, fontWeight:800, fontFamily:"var(--ff-mono)", color:s.color, lineHeight:1 }}>{s.value}</div>
                   <div style={{ fontSize:10, color:"var(--muted)", marginTop:4 }}>{s.sub}</div>
                 </div>
               ))}
@@ -941,7 +948,7 @@ function AllocationPanel({ holdings, livePrices, audUsd, displayCcy }) {
   return (
     <div style={{ background:"var(--card)", border:"1px solid var(--border)", borderRadius:14, padding:20, marginBottom:24 }}>
       <div style={{ fontSize:9, fontFamily:"var(--ff-mono)", color:"var(--muted)", letterSpacing:"0.12em", marginBottom:16 }}>ALLOCATION</div>
-      <div style={{ display:"grid", gridTemplateColumns:"160px 1fr 1fr", gap:24, alignItems:"start" }}>
+      <div className="alloc-panel-grid" style={{ display:"grid", gridTemplateColumns:"160px 1fr 1fr", gap:24, alignItems:"start" }}>
 
         {/* Donut */}
         <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:10 }}>

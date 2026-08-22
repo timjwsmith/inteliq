@@ -1,5 +1,5 @@
 loopered.bounceme.net {
-    reverse_proxy app:80
+    reverse_proxy inteliq-app:80
 }
 
 tripiq.hosthampster.com {
