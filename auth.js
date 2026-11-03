@@ -76,6 +76,25 @@ function requireAuth(req, res, next) {
   }
 }
 
+// ── Middleware: requireAdmin ──────────────────────────────────────────────
+// Requires a valid JWT AND an email in ADMIN_EMAILS (comma-separated).
+// If ADMIN_EMAILS is unset or empty, nobody is admin.
+
+function isAdminEmail(email) {
+  const list = (process.env.ADMIN_EMAILS || "")
+    .split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+  return list.length > 0 && list.includes((email || "").toLowerCase());
+}
+
+function requireAdmin(req, res, next) {
+  requireAuth(req, res, () => {
+    if (!isAdminEmail(req.user.email)) {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+    next();
+  });
+}
+
 // ── Routes ────────────────────────────────────────────────────────────────
 
 // Register with email + password — CLOSED to new registrations
@@ -182,4 +201,4 @@ router.post("/logout", requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
-module.exports = { router, requireAuth };
+module.exports = { router, requireAuth, requireAdmin };

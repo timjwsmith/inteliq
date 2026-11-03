@@ -59,6 +59,7 @@ const stmts = {
   getUserById:       db.prepare("SELECT * FROM users WHERE id = ?"),
   getUserByEmail:    db.prepare("SELECT * FROM users WHERE email = ? COLLATE NOCASE"),
   getUserByOAuth:    db.prepare("SELECT * FROM users WHERE auth_provider = ? AND oauth_id = ?"),
+  listUsers:         db.prepare("SELECT id, email, name, auth_provider, created_at FROM users ORDER BY created_at DESC"),
   createUser:        db.prepare("INSERT INTO users (email, name, avatar_url, password_hash, auth_provider, oauth_id) VALUES (?, ?, ?, ?, ?, ?)"),
   // Refresh tokens
   insertRefresh:     db.prepare("INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES (?, ?, ?)"),
@@ -76,6 +77,7 @@ const stmts = {
 
 function getUserById(id) { return stmts.getUserById.get(id); }
 function getUserByEmail(email) { return stmts.getUserByEmail.get(email); }
+function listUsers() { return stmts.listUsers.all(); }
 function getUserByOAuth(provider, oauthId) { return stmts.getUserByOAuth.get(provider, oauthId); }
 
 function createUser({ email, name, avatar, passwordHash, provider, oauthId }) {
@@ -124,7 +126,7 @@ function bulkSetUserData(userId, dataMap) {
 setInterval(() => { try { stmts.cleanExpired.run(); } catch {} }, 60 * 60 * 1000);
 
 module.exports = {
-  db, getUserById, getUserByEmail, getUserByOAuth, createUser,
+  db, getUserById, getUserByEmail, getUserByOAuth, createUser, listUsers,
   saveRefreshToken, getRefreshToken, deleteRefreshToken, deleteAllUserRefreshTokens,
   getUserData, setUserData, getAllUserData, bulkSetUserData,
 };

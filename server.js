@@ -6,7 +6,8 @@ require("dotenv").config();
 
 // Database & auth
 require("./db"); // initialize SQLite
-const { router: authRouter, requireAuth } = require("./auth");
+const { router: authRouter, requireAuth, requireAdmin } = require("./auth");
+const { listUsers } = require("./db");
 const userDataRouter = require("./user-data");
 
 const app = express();
@@ -2539,6 +2540,16 @@ app.get("/api/auth/config", (_, res) => res.json({
   googleClientId: process.env.GOOGLE_CLIENT_ID || null,
   appleClientId: process.env.APPLE_CLIENT_ID || null,
 }));
+
+// ── Admin: list all users ─────────────────────────────────────────────────
+app.get("/api/admin/users", requireAdmin, (_, res) => {
+  try {
+    res.json({ users: listUsers() });
+  } catch (err) {
+    console.error("Admin users error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ── Health ─────────────────────────────────────────────────────────────────
 app.get("/health", (_, res) => res.json({
