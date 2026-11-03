@@ -272,7 +272,7 @@ app.get("/api/coinbase/balances", requireAuth, async (req, res) => {
   }
 });
 
-app.get('/api/coinbase/diag', async (req, res) => {
+app.get('/api/coinbase/diag', requireAuth, async (req, res) => {
   try {
     // Check v3 AT accounts
     const p1 = '/api/v3/brokerage/accounts';
@@ -306,7 +306,7 @@ app.get('/api/coinbase/diag', async (req, res) => {
   }
 });
 
-app.get('/api/coinbase/usd-balance', async (req, res) => {
+app.get('/api/coinbase/usd-balance', requireAuth, async (req, res) => {
   try {
     // Use v3 brokerage accounts for fiat balances
     const path = '/api/v3/brokerage/accounts';
@@ -328,7 +328,7 @@ app.get('/api/coinbase/usd-balance', async (req, res) => {
   }
 });
 
-app.post('/api/coinbase/order', async (req, res) => {
+app.post('/api/coinbase/order', requireAuth, async (req, res) => {
   const { sym: rawSym, side, quoteSize, baseSize, limitPrice, orderType, tradeCcy, audUsd } = req.body;
   // Strip any trailing currency code so "BTC-AUD" → "BTC", "BTC" stays "BTC"
   const sym = rawSym.replace(/-(?:AUD|USD|USDC|USDT|EUR|GBP|DAI|BUSD)$/i, '').toUpperCase();

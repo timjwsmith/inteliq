@@ -145,7 +145,7 @@ router.post("/apple", async (req, res) => {
     if (!user) {
       user = getUserByEmail(userEmail);
       if (!user) {
-        user = createUser({ email: userEmail, name: userName, provider: "apple", oauthId: appleId });
+        return res.status(403).json({ error: "Registration is closed. Contact the administrator for access." });
       }
     }
     sendTokenPair(res, user);
