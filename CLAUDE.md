@@ -103,6 +103,18 @@ A full-stack React + Express investment dashboard. Live stock/crypto data, AI-po
 - GET  `/api/benchmarks` — ^GSPC + ^AXJO 1Y daily OHLCV, returns 1D/1W/1M/3M/1Y returns; 15-min cache
 - POST `/api/portfolio/history` — reconstructs portfolio value series from holdings × historical OHLCV; forward-fills holiday gaps
 - POST `/api/portfolio/risk` — Beta vs ^GSPC, annualised volatility, Sharpe (4.5% rf), max drawdown from 1Y daily OHLCV
+- GET  `/api/admin/users` — list all registered users (id, email, name, auth_provider, created_at, disabled); gated by `requireAdmin` (JWT + email in `ADMIN_EMAILS`)
+- PATCH `/api/admin/users/:id` — body `{ disabled: boolean }`; disabling also revokes all refresh tokens
+- POST `/api/admin/users/:id/revoke-tokens` — force sign-out (deletes refresh tokens; access token expires in ≤15m)
+- GET  `/api/admin/invites` — list all invites (email allowlist + codes) with uses/expiry/revoked state
+- POST `/api/admin/invites` — body `{ email?, generateCode?, maxUses?, expiresInDays? }`; must provide either `email` or `generateCode: true`
+- DELETE `/api/admin/invites/:id` — revoke an invite
+
+## Invite-only registration
+- `/register` requires `inviteCode` in body — a valid, unrevoked, unexpired code with uses < maxUses
+- Google/Apple OAuth auto-creates accounts only when the email matches an allowlist invite
+- Admin panel (sidebar ⚙ Admin, visible when the signed-in user's email is in `ADMIN_EMAILS`) manages users and invites
+- Disabling a user: writes `users.disabled = 1`, revokes refresh tokens; `requireAuth` middleware rejects further requests from the stored access token
 
 ## JSON parsing (all Claude endpoints)
 All Claude responses use `text.slice(text.indexOf("["), text.lastIndexOf("]") + 1)` for arrays
@@ -119,7 +131,7 @@ trailing text/commentary that Claude occasionally appends after the JSON.
 - Key requires **Coinbase App & Advanced Trade → View (read-only)** permission
 
 ## Environment variables (.env)
-ANTHROPIC_API_KEY, COINBASE_API_KEY, COINBASE_API_SECRET, BINANCE_API_KEY, BINANCE_API_SECRET, FINNHUB_API_KEY (used for IPO calendar — tab shows empty state if absent), FMP_API_KEY (financialmodelingprep.com — for live fundamentals)
+ANTHROPIC_API_KEY, COINBASE_API_KEY, COINBASE_API_SECRET, BINANCE_API_KEY, BINANCE_API_SECRET, FINNHUB_API_KEY (used for IPO calendar — tab shows empty state if absent), FMP_API_KEY (financialmodelingprep.com — for live fundamentals), ADMIN_EMAILS (comma-separated allowlist for `/api/admin/*` — unset = nobody is admin)
 
 ## Deployment
 docker-compose down && docker-compose up --build --force-recreate

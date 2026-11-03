@@ -6,7 +6,19 @@ require("dotenv").config();
 
 // Database & auth
 require("./db"); // initialize SQLite
-const { router: authRouter, requireAuth } = require("./auth");
+const { router: authRouter, requireAuth, requireAdmin } = require("./auth");
+const {
+  listUsers, setUserDisabled, deleteAllUserRefreshTokens,
+  listInvites, createInvite, revokeInvite,
+} = require("./db");
+
+// Human-friendly invite code: 12 chars, no confusable I/1/O/0
+function generateInviteCode() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let code = "";
+  for (let i = 0; i < 12; i++) code += alphabet[crypto.randomInt(0, alphabet.length)];
+  return code;
+}
 const userDataRouter = require("./user-data");
 
 const app = express();
@@ -272,7 +284,7 @@ app.get("/api/coinbase/balances", requireAuth, async (req, res) => {
   }
 });
 
-app.get('/api/coinbase/diag', async (req, res) => {
+app.get('/api/coinbase/diag', requireAuth, async (req, res) => {
   try {
     // Check v3 AT accounts
     const p1 = '/api/v3/brokerage/accounts';
@@ -306,7 +318,7 @@ app.get('/api/coinbase/diag', async (req, res) => {
   }
 });
 
-app.get('/api/coinbase/usd-balance', async (req, res) => {
+app.get('/api/coinbase/usd-balance', requireAuth, async (req, res) => {
   try {
     // Use v3 brokerage accounts for fiat balances
     const path = '/api/v3/brokerage/accounts';
@@ -328,7 +340,7 @@ app.get('/api/coinbase/usd-balance', async (req, res) => {
   }
 });
 
-app.post('/api/coinbase/order', async (req, res) => {
+app.post('/api/coinbase/order', requireAuth, async (req, res) => {
   const { sym: rawSym, side, quoteSize, baseSize, limitPrice, orderType, tradeCcy, audUsd } = req.body;
   // Strip any trailing currency code so "BTC-AUD" → "BTC", "BTC" stays "BTC"
   const sym = rawSym.replace(/-(?:AUD|USD|USDC|USDT|EUR|GBP|DAI|BUSD)$/i, '').toUpperCase();
@@ -2539,6 +2551,66 @@ app.get("/api/auth/config", (_, res) => res.json({
   googleClientId: process.env.GOOGLE_CLIENT_ID || null,
   appleClientId: process.env.APPLE_CLIENT_ID || null,
 }));
+
+// ── Admin: users ──────────────────────────────────────────────────────────
+app.get("/api/admin/users", requireAdmin, (_, res) => {
+  try { res.json({ users: listUsers() }); }
+  catch (err) { console.error("Admin users error:", err.message); res.status(500).json({ error: err.message }); }
+});
+
+app.patch("/api/admin/users/:id", requireAdmin, (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: "Invalid user id" });
+  if (id === req.user.id) return res.status(400).json({ error: "Cannot modify your own account here." });
+  const { disabled } = req.body;
+  if (typeof disabled !== "boolean") return res.status(400).json({ error: "disabled (boolean) required" });
+  try {
+    setUserDisabled(id, disabled);
+    if (disabled) deleteAllUserRefreshTokens(id);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post("/api/admin/users/:id/revoke-tokens", requireAdmin, (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: "Invalid user id" });
+  try { deleteAllUserRefreshTokens(id); res.json({ ok: true }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Admin: invites ────────────────────────────────────────────────────────
+app.get("/api/admin/invites", requireAdmin, (_, res) => {
+  try { res.json({ invites: listInvites() }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post("/api/admin/invites", requireAdmin, (req, res) => {
+  const { email, generateCode, maxUses, expiresInDays } = req.body || {};
+  if (!email && !generateCode) {
+    return res.status(400).json({ error: "Provide an email, or set generateCode: true." });
+  }
+  const code = generateCode ? generateInviteCode() : null;
+  const expiresAt = expiresInDays
+    ? new Date(Date.now() + Number(expiresInDays) * 86400_000).toISOString()
+    : null;
+  try {
+    const id = createInvite({
+      email: email || null,
+      code,
+      maxUses: Math.max(1, parseInt(maxUses, 10) || 1),
+      createdBy: req.user.id,
+      expiresAt,
+    });
+    res.json({ ok: true, id, code });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete("/api/admin/invites/:id", requireAdmin, (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: "Invalid invite id" });
+  try { revokeInvite(id); res.json({ ok: true }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
 
 // ── Health ─────────────────────────────────────────────────────────────────
 app.get("/health", (_, res) => res.json({

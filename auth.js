@@ -6,6 +6,7 @@ const {
   getUserByEmail, getUserByOAuth, createUser,
   saveRefreshToken, getRefreshToken, deleteRefreshToken,
   deleteAllUserRefreshTokens, getUserById,
+  getInviteByEmail, getInviteByCode, consumeInvite,
 } = require("./db");
 
 const router = express.Router();
@@ -45,7 +46,10 @@ function sendTokenPair(res, user) {
   res.json({
     accessToken,
     refreshToken,
-    user: { id: user.id, email: user.email, name: user.name, avatar: user.avatar_url },
+    user: {
+      id: user.id, email: user.email, name: user.name, avatar: user.avatar_url,
+      isAdmin: isAdminEmail(user.email),
+    },
   });
 }
 
@@ -66,6 +70,11 @@ function requireAuth(req, res, next) {
   try {
     const token = authHeader.slice(7);
     const decoded = jwt.verify(token, JWT_SECRET);
+    // Reject access for disabled or deleted accounts even if token is still within TTL
+    const u = getUserById(decoded.id);
+    if (!u || u.disabled) {
+      return res.status(401).json({ error: "Account disabled", code: "ACCOUNT_DISABLED" });
+    }
     req.user = decoded; // { id, email, name }
     next();
   } catch (err) {
@@ -76,11 +85,45 @@ function requireAuth(req, res, next) {
   }
 }
 
+// ── Middleware: requireAdmin ──────────────────────────────────────────────
+// Requires a valid JWT AND an email in ADMIN_EMAILS (comma-separated).
+// If ADMIN_EMAILS is unset or empty, nobody is admin.
+
+function isAdminEmail(email) {
+  const list = (process.env.ADMIN_EMAILS || "")
+    .split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+  return list.length > 0 && list.includes((email || "").toLowerCase());
+}
+
+function requireAdmin(req, res, next) {
+  requireAuth(req, res, () => {
+    if (!isAdminEmail(req.user.email)) {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+    next();
+  });
+}
+
 // ── Routes ────────────────────────────────────────────────────────────────
 
-// Register with email + password — CLOSED to new registrations
+// Register with email + password — requires a valid invite code
 router.post("/register", (req, res) => {
-  return res.status(403).json({ error: "Registration is closed. Contact the administrator for access." });
+  const { email, password, name, inviteCode } = req.body;
+  if (!email || !password) return res.status(400).json({ error: "Email and password required" });
+  if (!inviteCode) return res.status(403).json({ error: "Invite code required. Registration is invite-only." });
+  if (!isValidPassword(password)) {
+    return res.status(400).json({ error: "Password must be 8+ chars with a number and a lowercase letter, or 15+ chars." });
+  }
+  if (getUserByEmail(email)) return res.status(409).json({ error: "An account with that email already exists." });
+  const invite = getInviteByCode(inviteCode);
+  if (!invite) return res.status(403).json({ error: "Invalid or expired invite code." });
+  if (invite.email && invite.email.toLowerCase() !== email.toLowerCase()) {
+    return res.status(403).json({ error: "This invite is tied to a different email." });
+  }
+  const passwordHash = bcrypt.hashSync(password, 10);
+  const user = createUser({ email, name: name || null, passwordHash, provider: "local" });
+  consumeInvite(invite.id);
+  sendTokenPair(res, user);
 });
 
 // Login with email + password
@@ -92,6 +135,7 @@ router.post("/login", (req, res) => {
   if (!bcrypt.compareSync(password, user.password_hash)) {
     return res.status(401).json({ error: "Invalid email or password" });
   }
+  if (user.disabled) return res.status(403).json({ error: "This account has been disabled." });
   sendTokenPair(res, user);
 });
 
@@ -111,14 +155,16 @@ router.post("/google", async (req, res) => {
     const { sub: googleId, email, name, picture } = payload;
     if (!email) return res.status(400).json({ error: "No email in Google token" });
 
-    // Find existing user only — no new accounts
+    // Find existing user; else allow if email is on the invite allowlist
     let user = getUserByOAuth("google", googleId);
+    if (!user) user = getUserByEmail(email);
     if (!user) {
-      user = getUserByEmail(email);
-      if (!user) {
-        return res.status(403).json({ error: "Registration is closed. Contact the administrator for access." });
-      }
+      const invite = getInviteByEmail(email);
+      if (!invite) return res.status(403).json({ error: "No invite for this email. Ask the administrator for access." });
+      user = createUser({ email, name, avatar: picture, provider: "google", oauthId: googleId });
+      consumeInvite(invite.id);
     }
+    if (user.disabled) return res.status(403).json({ error: "This account has been disabled." });
     sendTokenPair(res, user);
   } catch (err) {
     console.error("Google auth error:", err.message);
@@ -142,12 +188,14 @@ router.post("/apple", async (req, res) => {
     const userName = appleUser ? `${appleUser.name?.firstName || ""} ${appleUser.name?.lastName || ""}`.trim() : null;
 
     let user = getUserByOAuth("apple", appleId);
+    if (!user) user = getUserByEmail(userEmail);
     if (!user) {
-      user = getUserByEmail(userEmail);
-      if (!user) {
-        user = createUser({ email: userEmail, name: userName, provider: "apple", oauthId: appleId });
-      }
+      const invite = getInviteByEmail(userEmail);
+      if (!invite) return res.status(403).json({ error: "No invite for this email. Ask the administrator for access." });
+      user = createUser({ email: userEmail, name: userName, provider: "apple", oauthId: appleId });
+      consumeInvite(invite.id);
     }
+    if (user.disabled) return res.status(403).json({ error: "This account has been disabled." });
     sendTokenPair(res, user);
   } catch (err) {
     console.error("Apple auth error:", err.message);
@@ -173,7 +221,10 @@ router.post("/refresh", (req, res) => {
 router.get("/me", requireAuth, (req, res) => {
   const user = getUserById(req.user.id);
   if (!user) return res.status(404).json({ error: "User not found" });
-  res.json({ id: user.id, email: user.email, name: user.name, avatar: user.avatar_url });
+  res.json({
+    id: user.id, email: user.email, name: user.name, avatar: user.avatar_url,
+    isAdmin: isAdminEmail(user.email),
+  });
 });
 
 // Logout (invalidate all refresh tokens)
@@ -182,4 +233,4 @@ router.post("/logout", requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
-module.exports = { router, requireAuth };
+module.exports = { router, requireAuth, requireAdmin };
