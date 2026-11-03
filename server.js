@@ -2622,6 +2622,9 @@ app.get("/health", (_, res) => res.json({
   finnhub:   !!FINNHUB_API_KEY,
   fmp:       !!FMP_API_KEY,
   ipo:       !!FINNHUB_API_KEY,
+  // Count of admin emails configured — reveals whether ADMIN_EMAILS is set
+  // without leaking the actual addresses.
+  adminEmails: (process.env.ADMIN_EMAILS || "").split(",").map(s => s.trim()).filter(Boolean).length,
 }));
 
 app.listen(PORT, () => {
