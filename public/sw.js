@@ -1,4 +1,4 @@
-const CACHE_NAME = "inteliq-v11";
+const CACHE_NAME = "inteliq-v12";
 
 self.addEventListener("install", () => {
   self.skipWaiting();
