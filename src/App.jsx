@@ -2549,12 +2549,249 @@ function GlossaryModal({ open, onClose, focusTerm, allGlossary }) {
   );
 }
 
+// ── Admin Panel ────────────────────────────────────────────────────────────
+function AdminPanel({ open, onClose, authFetch, currentUserId }) {
+  const [tab, setTab] = useState("users");
+  const [users, setUsers] = useState([]);
+  const [invites, setInvites] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [busyId, setBusyId] = useState(null);
+  // New-invite form
+  const [inviteMode, setInviteMode] = useState("email"); // "email" | "code"
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [maxUses, setMaxUses] = useState(1);
+  const [expiresDays, setExpiresDays] = useState(14);
+  const [newCode, setNewCode] = useState("");
+
+  const refresh = useCallback(async () => {
+    setLoading(true); setError("");
+    try {
+      const [uR, iR] = await Promise.all([
+        authFetch("/api/admin/users"),
+        authFetch("/api/admin/invites"),
+      ]);
+      if (!uR.ok) throw new Error((await uR.json()).error || "Failed to load users");
+      if (!iR.ok) throw new Error((await iR.json()).error || "Failed to load invites");
+      const [uD, iD] = await Promise.all([uR.json(), iR.json()]);
+      setUsers(uD.users || []);
+      setInvites(iD.invites || []);
+    } catch (e) { setError(e.message); }
+    setLoading(false);
+  }, [authFetch]);
+
+  useEffect(() => { if (open) refresh(); else { setError(""); setNewCode(""); } }, [open, refresh]);
+
+  async function toggleDisabled(u) {
+    setBusyId(u.id); setError("");
+    try {
+      const r = await authFetch(`/api/admin/users/${u.id}`, {
+        method:"PATCH", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ disabled: !u.disabled }),
+      });
+      if (!r.ok) throw new Error((await r.json()).error || "Update failed");
+      await refresh();
+    } catch (e) { setError(e.message); }
+    setBusyId(null);
+  }
+
+  async function revokeTokens(u) {
+    if (!window.confirm(`Force sign-out ${u.email}? They'll be logged out everywhere within 15 minutes.`)) return;
+    setBusyId(u.id); setError("");
+    try {
+      const r = await authFetch(`/api/admin/users/${u.id}/revoke-tokens`, { method:"POST" });
+      if (!r.ok) throw new Error((await r.json()).error || "Revoke failed");
+    } catch (e) { setError(e.message); }
+    setBusyId(null);
+  }
+
+  async function createInvite() {
+    setError(""); setNewCode("");
+    const body = {
+      maxUses: Math.max(1, parseInt(maxUses, 10) || 1),
+      expiresInDays: expiresDays ? Math.max(1, parseInt(expiresDays, 10)) : null,
+    };
+    if (inviteMode === "email") {
+      if (!inviteEmail.trim()) { setError("Enter an email."); return; }
+      body.email = inviteEmail.trim();
+    } else {
+      body.generateCode = true;
+    }
+    try {
+      const r = await authFetch("/api/admin/invites", {
+        method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || "Create failed");
+      if (d.code) setNewCode(d.code);
+      setInviteEmail("");
+      await refresh();
+    } catch (e) { setError(e.message); }
+  }
+
+  async function revokeInviteRow(inv) {
+    if (!window.confirm(`Revoke this invite? It can't be reused.`)) return;
+    setBusyId(`inv-${inv.id}`); setError("");
+    try {
+      const r = await authFetch(`/api/admin/invites/${inv.id}`, { method:"DELETE" });
+      if (!r.ok) throw new Error((await r.json()).error || "Revoke failed");
+      await refresh();
+    } catch (e) { setError(e.message); }
+    setBusyId(null);
+  }
+
+  if (!open) return null;
+
+  const providerBadge = (p) => ({
+    local: { bg:"#448aff18", fg:"var(--blue)", bd:"#448aff35" },
+    google: { bg:"#00e67618", fg:"var(--green)", bd:"#00e67635" },
+    apple: { bg:"#ffffff10", fg:"var(--text2)", bd:"#ffffff30" },
+  }[p] || { bg:"#ffab4018", fg:"var(--amber)", bd:"#ffab4035" });
+
+  const inviteStatus = (inv) => {
+    if (inv.revoked) return { label:"REVOKED", color:"var(--muted)" };
+    if (inv.expires_at && new Date(inv.expires_at) < new Date()) return { label:"EXPIRED", color:"var(--muted)" };
+    if (inv.uses >= inv.max_uses) return { label:"USED", color:"var(--muted2)" };
+    return { label:"ACTIVE", color:"var(--green)" };
+  };
+
+  const fmtDate = (s) => s ? new Date(s).toLocaleDateString("en-AU", { year:"2-digit", month:"short", day:"numeric" }) : "—";
+  const tabBtn = (id, label, count) => (
+    <button onClick={() => setTab(id)} style={{
+      background: tab===id ? "var(--card)" : "none",
+      border:"1px solid "+(tab===id ? "var(--border2)" : "transparent"),
+      borderRadius:8, padding:"8px 16px", fontSize:11, fontFamily:"var(--ff-mono)",
+      letterSpacing:"0.08em", color: tab===id ? "var(--text2)" : "var(--muted)", cursor:"pointer",
+    }}>{label} <span style={{ opacity:0.6 }}>({count})</span></button>
+  );
+
+  return (
+    <div onClick={onClose} style={{ position:"fixed", inset:0, background:"#00000090", zIndex:1000, display:"flex", alignItems:"flex-start", justifyContent:"center", padding:"5vh 20px", overflowY:"auto" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background:"var(--surface)", border:"1px solid var(--border2)", borderRadius:16, padding:"24px 28px", maxWidth:860, width:"100%", marginBottom:40 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:16 }}>
+          <div>
+            <h2 style={{ fontFamily:"var(--ff-head)", fontSize:22, fontWeight:800, color:"var(--text2)", letterSpacing:"-0.02em" }}>Admin</h2>
+            <p style={{ fontSize:11, color:"var(--muted)", fontFamily:"var(--ff-mono)", letterSpacing:"0.06em", marginTop:4 }}>
+              USERS · INVITES
+            </p>
+          </div>
+          <button onClick={onClose} style={{ background:"none", border:"1px solid var(--border)", borderRadius:8, padding:"7px 16px", color:"var(--muted2)", fontSize:11, fontFamily:"var(--ff-mono)", letterSpacing:"0.06em", flexShrink:0 }}>CLOSE ✕</button>
+        </div>
+
+        <div style={{ display:"flex", gap:6, marginBottom:16, borderBottom:"1px solid var(--border)", paddingBottom:12 }}>
+          {tabBtn("users", "USERS", users.length)}
+          {tabBtn("invites", "INVITES", invites.length)}
+        </div>
+
+        {error && (
+          <div style={{ background:"#ff525218", border:"1px solid #ff525240", borderRadius:8, padding:"10px 14px", fontSize:12, color:"var(--red)", fontFamily:"var(--ff-body)", marginBottom:14 }}>
+            {error}
+          </div>
+        )}
+        {loading && <div style={{ fontSize:11, color:"var(--muted)", fontFamily:"var(--ff-mono)", marginBottom:10 }}>LOADING…</div>}
+
+        {tab === "users" && (
+          <div style={{ maxHeight:"62vh", overflowY:"auto" }}>
+            {users.length === 0 && !loading && <div style={{ fontSize:13, color:"var(--muted)", textAlign:"center", padding:"24px 0" }}>No users.</div>}
+            {users.map(u => {
+              const pb = providerBadge(u.auth_provider);
+              const isSelf = u.id === currentUserId;
+              return (
+                <div key={u.id} style={{ display:"grid", gridTemplateColumns:"1fr auto", gap:12, alignItems:"center", padding:"12px 4px", borderBottom:"1px solid var(--border)" }}>
+                  <div style={{ minWidth:0 }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                      <span style={{ fontSize:13, fontWeight:600, color:"var(--text2)", fontFamily:"var(--ff-body)", overflow:"hidden", textOverflow:"ellipsis" }}>{u.email}</span>
+                      <span className="badge" style={{ background:pb.bg, color:pb.fg, border:`1px solid ${pb.bd}`, fontSize:9, letterSpacing:"0.08em" }}>{(u.auth_provider||"").toUpperCase()}</span>
+                      {u.disabled ? <span className="badge" style={{ background:"#ff525218", color:"var(--red)", border:"1px solid #ff525240", fontSize:9, letterSpacing:"0.08em" }}>DISABLED</span> : null}
+                      {isSelf ? <span className="badge" style={{ background:"var(--amber)18", color:"var(--amber)", border:"1px solid var(--amber)40", fontSize:9, letterSpacing:"0.08em" }}>YOU</span> : null}
+                    </div>
+                    <div style={{ fontSize:11, color:"var(--muted)", fontFamily:"var(--ff-mono)", marginTop:3 }}>
+                      {u.name || "—"} · joined {fmtDate(u.created_at)}
+                    </div>
+                  </div>
+                  <div style={{ display:"flex", gap:6, flexShrink:0 }}>
+                    <button disabled={isSelf || busyId===u.id} onClick={() => revokeTokens(u)} style={{ background:"none", border:"1px solid var(--border)", borderRadius:6, padding:"6px 10px", fontSize:10, fontFamily:"var(--ff-mono)", color: isSelf ? "var(--muted)" : "var(--amber)", cursor: isSelf ? "default" : "pointer", letterSpacing:"0.06em", opacity: isSelf?0.5:1 }}>REVOKE TOKENS</button>
+                    <button disabled={isSelf || busyId===u.id} onClick={() => toggleDisabled(u)} style={{ background:"none", border:`1px solid ${u.disabled ? "var(--green)" : "var(--red)"}40`, borderRadius:6, padding:"6px 10px", fontSize:10, fontFamily:"var(--ff-mono)", color: isSelf ? "var(--muted)" : (u.disabled ? "var(--green)" : "var(--red)"), cursor: isSelf ? "default" : "pointer", letterSpacing:"0.06em", opacity: isSelf?0.5:1 }}>{u.disabled ? "ENABLE" : "DISABLE"}</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {tab === "invites" && (
+          <div>
+            {/* Create invite form */}
+            <div style={{ background:"var(--card)", border:"1px solid var(--border)", borderRadius:12, padding:"14px 16px", marginBottom:16 }}>
+              <div style={{ display:"flex", gap:6, marginBottom:12 }}>
+                <button onClick={() => setInviteMode("email")} style={{ background: inviteMode==="email" ? "var(--surface)" : "none", border:"1px solid "+(inviteMode==="email" ? "var(--border2)" : "transparent"), borderRadius:6, padding:"6px 12px", fontSize:10, fontFamily:"var(--ff-mono)", color: inviteMode==="email" ? "var(--text2)" : "var(--muted)", cursor:"pointer", letterSpacing:"0.06em" }}>INVITE BY EMAIL</button>
+                <button onClick={() => setInviteMode("code")} style={{ background: inviteMode==="code" ? "var(--surface)" : "none", border:"1px solid "+(inviteMode==="code" ? "var(--border2)" : "transparent"), borderRadius:6, padding:"6px 12px", fontSize:10, fontFamily:"var(--ff-mono)", color: inviteMode==="code" ? "var(--text2)" : "var(--muted)", cursor:"pointer", letterSpacing:"0.06em" }}>GENERATE CODE</button>
+              </div>
+              <div style={{ display:"grid", gridTemplateColumns: inviteMode==="email" ? "2fr 1fr 1fr auto" : "1fr 1fr auto", gap:10, alignItems:"end" }}>
+                {inviteMode === "email" && (
+                  <div>
+                    <label style={{ display:"block", fontSize:10, color:"var(--muted)", fontFamily:"var(--ff-mono)", letterSpacing:"0.06em", marginBottom:4 }}>EMAIL</label>
+                    <input value={inviteEmail} onChange={e => setInviteEmail(e.target.value)} placeholder="person@example.com" style={{ width:"100%", background:"var(--bg)", border:"1px solid var(--border)", borderRadius:8, padding:"8px 12px", fontSize:13, color:"var(--text2)", fontFamily:"var(--ff-body)", boxSizing:"border-box" }}/>
+                  </div>
+                )}
+                <div>
+                  <label style={{ display:"block", fontSize:10, color:"var(--muted)", fontFamily:"var(--ff-mono)", letterSpacing:"0.06em", marginBottom:4 }}>MAX USES</label>
+                  <input type="number" min="1" value={maxUses} onChange={e => setMaxUses(e.target.value)} style={{ width:"100%", background:"var(--bg)", border:"1px solid var(--border)", borderRadius:8, padding:"8px 12px", fontSize:13, color:"var(--text2)", fontFamily:"var(--ff-mono)", boxSizing:"border-box" }}/>
+                </div>
+                <div>
+                  <label style={{ display:"block", fontSize:10, color:"var(--muted)", fontFamily:"var(--ff-mono)", letterSpacing:"0.06em", marginBottom:4 }}>EXPIRES (DAYS)</label>
+                  <input type="number" min="0" value={expiresDays} onChange={e => setExpiresDays(e.target.value)} placeholder="never" style={{ width:"100%", background:"var(--bg)", border:"1px solid var(--border)", borderRadius:8, padding:"8px 12px", fontSize:13, color:"var(--text2)", fontFamily:"var(--ff-mono)", boxSizing:"border-box" }}/>
+                </div>
+                <button onClick={createInvite} style={{ background:"var(--green)", color:"#0a0a14", border:"none", borderRadius:8, padding:"9px 16px", fontSize:11, fontWeight:700, fontFamily:"var(--ff-head)", cursor:"pointer", letterSpacing:"0.04em" }}>CREATE</button>
+              </div>
+              {newCode && (
+                <div style={{ marginTop:12, background:"var(--bg)", border:"1px solid var(--green)40", borderRadius:8, padding:"10px 14px", display:"flex", alignItems:"center", gap:12 }}>
+                  <div style={{ flex:1, fontSize:16, fontFamily:"var(--ff-mono)", color:"var(--green)", letterSpacing:"0.1em", fontWeight:700 }}>{newCode}</div>
+                  <button onClick={() => { try { navigator.clipboard.writeText(newCode); } catch {} }} style={{ background:"none", border:"1px solid var(--border)", borderRadius:6, padding:"5px 12px", fontSize:10, color:"var(--muted2)", fontFamily:"var(--ff-mono)", cursor:"pointer", letterSpacing:"0.06em" }}>COPY</button>
+                </div>
+              )}
+            </div>
+
+            {/* Invite list */}
+            <div style={{ maxHeight:"50vh", overflowY:"auto" }}>
+              {invites.length === 0 && !loading && <div style={{ fontSize:13, color:"var(--muted)", textAlign:"center", padding:"24px 0" }}>No invites yet.</div>}
+              {invites.map(inv => {
+                const st = inviteStatus(inv);
+                const canRevoke = !inv.revoked && inv.uses < inv.max_uses;
+                return (
+                  <div key={inv.id} style={{ display:"grid", gridTemplateColumns:"1fr auto", gap:12, alignItems:"center", padding:"10px 4px", borderBottom:"1px solid var(--border)" }}>
+                    <div style={{ minWidth:0 }}>
+                      <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                        {inv.code
+                          ? <span style={{ fontFamily:"var(--ff-mono)", fontSize:13, color:"var(--text2)", letterSpacing:"0.08em", fontWeight:700 }}>{inv.code}</span>
+                          : <span style={{ fontSize:13, color:"var(--text2)", fontFamily:"var(--ff-body)" }}>{inv.email}</span>}
+                        <span className="badge" style={{ background:"transparent", color:st.color, border:`1px solid ${st.color}40`, fontSize:9, letterSpacing:"0.08em" }}>{st.label}</span>
+                      </div>
+                      <div style={{ fontSize:11, color:"var(--muted)", fontFamily:"var(--ff-mono)", marginTop:3 }}>
+                        {inv.uses}/{inv.max_uses} uses · {inv.expires_at ? `expires ${fmtDate(inv.expires_at)}` : "no expiry"} · created {fmtDate(inv.created_at)}{inv.created_by_email ? ` by ${inv.created_by_email}` : ""}
+                      </div>
+                    </div>
+                    {canRevoke && (
+                      <button disabled={busyId===`inv-${inv.id}`} onClick={() => revokeInviteRow(inv)} style={{ background:"none", border:"1px solid var(--red)40", borderRadius:6, padding:"6px 10px", fontSize:10, fontFamily:"var(--ff-mono)", color:"var(--red)", cursor:"pointer", letterSpacing:"0.06em" }}>REVOKE</button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Login / Register Screen ────────────────────────────────────────────────
 function LoginScreen({ onAuth }) {
   const [mode, setMode] = useState("login"); // "login" | "register"
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
+  const [inviteCode, setInviteCode] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [authConfig, setAuthConfig] = useState(null);
@@ -2580,7 +2817,7 @@ function LoginScreen({ onAuth }) {
     setError(""); setLoading(true);
     try {
       const endpoint = mode === "register" ? "/api/auth/register" : "/api/auth/login";
-      const body = mode === "register" ? { email, password, name } : { email, password };
+      const body = mode === "register" ? { email, password, name, inviteCode } : { email, password };
       const r = await fetch(endpoint, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body) });
       const d = await r.json();
       if (!r.ok) { setError(d.error || "Authentication failed"); setLoading(false); return; }
@@ -2674,10 +2911,19 @@ function LoginScreen({ onAuth }) {
             {/* Form */}
             <form onSubmit={handleSubmit} style={{ display:"grid", gap:16 }}>
               {mode === "register" && (
-                <div>
-                  <label style={{ display:"block", fontSize:13, fontWeight:600, color:"var(--text2)", fontFamily:"var(--ff-body)", marginBottom:6 }}>Name</label>
-                  <input value={name} onChange={e => setName(e.target.value)} placeholder="Your name" style={inputStyle}/>
-                </div>
+                <>
+                  <div>
+                    <label style={{ display:"block", fontSize:13, fontWeight:600, color:"var(--text2)", fontFamily:"var(--ff-body)", marginBottom:6 }}>Name</label>
+                    <input value={name} onChange={e => setName(e.target.value)} placeholder="Your name" style={inputStyle}/>
+                  </div>
+                  <div>
+                    <label style={{ display:"block", fontSize:13, fontWeight:600, color:"var(--text2)", fontFamily:"var(--ff-body)", marginBottom:6 }}>Invite code<span style={{ color:"var(--red)" }}>*</span></label>
+                    <input value={inviteCode} onChange={e => setInviteCode(e.target.value.toUpperCase())} placeholder="Invite code" required style={{ ...inputStyle, fontFamily:"var(--ff-mono)", letterSpacing:"0.08em" }}/>
+                    <div style={{ fontSize:11, color:"var(--muted)", marginTop:6, fontFamily:"var(--ff-body)" }}>
+                      Registration is invite-only. Ask the administrator for a code.
+                    </div>
+                  </div>
+                </>
               )}
               <div>
                 <label style={{ display:"block", fontSize:13, fontWeight:600, color:"var(--text2)", fontFamily:"var(--ff-body)", marginBottom:6 }}>Email<span style={{ color:"var(--red)" }}>*</span></label>
@@ -2974,6 +3220,7 @@ function AppMain({ user, authFetch, onLogout }) {
 
   // Glossary
   const [glossaryOpen,setGlossaryOpen] = useState(false);
+  const [adminOpen,setAdminOpen] = useState(false);
   const [glossaryTerm,setGlossaryTerm] = useState(null);
   const openGlossary = t => { setGlossaryTerm(t||null); setGlossaryOpen(true); };
   const [tradeModal,setTradeModal] = useState(null);
@@ -3720,6 +3967,12 @@ function AppMain({ user, authFetch, onLogout }) {
                   <span className="nav-badge" style={{ marginLeft:"auto", background:"var(--amber)20", color:"var(--amber)", borderRadius:6, padding:"1px 7px", fontSize:10, fontFamily:"var(--ff-mono)", border:"1px solid var(--amber)40" }}>{customTerms.length}</span>
                 )}
               </button>
+              {user.isAdmin && (
+                <button className="nav-item" onClick={()=>setAdminOpen(true)} style={{ color:"var(--blue)", width:"100%" }}>
+                  <span className="nav-icon" style={{ fontSize:14 }}>⚙</span>
+                  <span>Admin</span>
+                </button>
+              )}
             </div>
           </nav>
           <div className="sidebar-footer" style={{ padding:"16px 8px 0", borderTop:"1px solid var(--border)", marginTop:16 }}>
@@ -3757,6 +4010,12 @@ function AppMain({ user, authFetch, onLogout }) {
                 <span className="nav-icon" style={{color:"var(--amber)"}}>◈</span>
                 <span>Glossary</span>
               </button>
+              {user.isAdmin && (
+                <button className={false?"active":""} onClick={()=>{setAdminOpen(true);setMobileMore(false);}}>
+                  <span className="nav-icon" style={{color:"var(--blue)"}}>⚙</span>
+                  <span>Admin</span>
+                </button>
+              )}
             </div>
           </>
         )}
@@ -5514,6 +5773,7 @@ function AppMain({ user, authFetch, onLogout }) {
         <TradeModal config={tradeModal} onClose={()=>setTradeModal(null)} onSuccess={(ex)=>{setTradeModal(null);if(ex==="binance")syncBinance();else if(ex==="tiger"){syncTiger();syncTigerOrders();}else syncCoinbase();}} displayCcy={displayCcy} audUsd={audUsd} authFetch={authFetch} />
       )}
       <GlossaryModal open={glossaryOpen} onClose={()=>setGlossaryOpen(false)} focusTerm={glossaryTerm} allGlossary={allGlossary}/>
+      <AdminPanel open={adminOpen} onClose={()=>setAdminOpen(false)} authFetch={authFetch} currentUserId={user.id}/>
     </>
     </GlossaryCtx.Provider>
   );

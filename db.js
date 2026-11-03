@@ -52,15 +52,46 @@ db.exec(`
     created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(user_id, key_name)
   );
+
+  CREATE TABLE IF NOT EXISTS invites (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    email       TEXT COLLATE NOCASE,
+    code        TEXT UNIQUE,
+    max_uses    INTEGER NOT NULL DEFAULT 1,
+    uses        INTEGER NOT NULL DEFAULT 0,
+    created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    expires_at  DATETIME,
+    revoked     INTEGER NOT NULL DEFAULT 0,
+    CHECK (email IS NOT NULL OR code IS NOT NULL)
+  );
+  CREATE INDEX IF NOT EXISTS idx_invites_email ON invites(email);
+  CREATE INDEX IF NOT EXISTS idx_invites_code  ON invites(code);
 `);
+
+// Additive migration: users.disabled flag (safe to re-run)
+const userCols = db.prepare("PRAGMA table_info(users)").all().map(c => c.name);
+if (!userCols.includes("disabled")) {
+  db.exec("ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0");
+}
 
 // ── User helpers ──────────────────────────────────────────────────────────
 const stmts = {
   getUserById:       db.prepare("SELECT * FROM users WHERE id = ?"),
   getUserByEmail:    db.prepare("SELECT * FROM users WHERE email = ? COLLATE NOCASE"),
   getUserByOAuth:    db.prepare("SELECT * FROM users WHERE auth_provider = ? AND oauth_id = ?"),
-  listUsers:         db.prepare("SELECT id, email, name, auth_provider, created_at FROM users ORDER BY created_at DESC"),
+  listUsers:         db.prepare("SELECT id, email, name, auth_provider, created_at, disabled FROM users ORDER BY created_at DESC"),
   createUser:        db.prepare("INSERT INTO users (email, name, avatar_url, password_hash, auth_provider, oauth_id) VALUES (?, ?, ?, ?, ?, ?)"),
+  setUserDisabled:   db.prepare("UPDATE users SET disabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"),
+  // Invites
+  listInvites:       db.prepare(`SELECT i.id, i.email, i.code, i.max_uses, i.uses, i.created_at, i.expires_at, i.revoked, u.email AS created_by_email
+                                 FROM invites i LEFT JOIN users u ON u.id = i.created_by
+                                 ORDER BY i.created_at DESC`),
+  createInvite:      db.prepare("INSERT INTO invites (email, code, max_uses, created_by, expires_at) VALUES (?, ?, ?, ?, ?)"),
+  getInviteByEmail:  db.prepare(`SELECT * FROM invites WHERE email = ? COLLATE NOCASE AND revoked = 0 AND uses < max_uses AND (expires_at IS NULL OR expires_at > datetime('now'))`),
+  getInviteByCode:   db.prepare(`SELECT * FROM invites WHERE code = ? AND revoked = 0 AND uses < max_uses AND (expires_at IS NULL OR expires_at > datetime('now'))`),
+  consumeInvite:     db.prepare("UPDATE invites SET uses = uses + 1 WHERE id = ?"),
+  revokeInvite:      db.prepare("UPDATE invites SET revoked = 1 WHERE id = ?"),
   // Refresh tokens
   insertRefresh:     db.prepare("INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES (?, ?, ?)"),
   getRefresh:        db.prepare("SELECT * FROM refresh_tokens WHERE token_hash = ? AND expires_at > datetime('now')"),
@@ -84,6 +115,18 @@ function createUser({ email, name, avatar, passwordHash, provider, oauthId }) {
   const info = stmts.createUser.run(email, name || null, avatar || null, passwordHash || null, provider || "local", oauthId || null);
   return getUserById(info.lastInsertRowid);
 }
+
+function setUserDisabled(id, disabled) { stmts.setUserDisabled.run(disabled ? 1 : 0, id); }
+
+function listInvites() { return stmts.listInvites.all(); }
+function createInvite({ email, code, maxUses, createdBy, expiresAt }) {
+  const info = stmts.createInvite.run(email || null, code || null, maxUses || 1, createdBy || null, expiresAt || null);
+  return info.lastInsertRowid;
+}
+function getInviteByEmail(email) { return stmts.getInviteByEmail.get(email); }
+function getInviteByCode(code)  { return stmts.getInviteByCode.get(code); }
+function consumeInvite(id)      { stmts.consumeInvite.run(id); }
+function revokeInvite(id)       { stmts.revokeInvite.run(id); }
 
 function saveRefreshToken(userId, tokenHash, expiresAt) {
   stmts.insertRefresh.run(userId, tokenHash, expiresAt);
@@ -126,7 +169,8 @@ function bulkSetUserData(userId, dataMap) {
 setInterval(() => { try { stmts.cleanExpired.run(); } catch {} }, 60 * 60 * 1000);
 
 module.exports = {
-  db, getUserById, getUserByEmail, getUserByOAuth, createUser, listUsers,
+  db, getUserById, getUserByEmail, getUserByOAuth, createUser, listUsers, setUserDisabled,
+  listInvites, createInvite, getInviteByEmail, getInviteByCode, consumeInvite, revokeInvite,
   saveRefreshToken, getRefreshToken, deleteRefreshToken, deleteAllUserRefreshTokens,
   getUserData, setUserData, getAllUserData, bulkSetUserData,
 };
