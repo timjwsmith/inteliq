@@ -272,7 +272,7 @@ app.get("/api/coinbase/balances", requireAuth, async (req, res) => {
         return {
           sym: p.asset, name: p.asset, qty,
           avg: qty > 0 ? costBasis / qty : 0,
-          avgCurrency: "USD",
+          avgCurrency: p.cost_basis?.currency || "USD",
           sector: "Crypto", horizon: "Medium", priceType: "crypto", source: "coinbase",
         };
       });
